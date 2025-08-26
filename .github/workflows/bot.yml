@@ -30,7 +30,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DERIV_API_TOKEN: ${{ secrets.DERIV_API_KEY }}
+          DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
           DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
           DERIV_SYMBOLS: "R_10,R_50,R_75,R_75_1S,R_100_1S,R_150_1S"
           DERIV_TIMEFRAME: "360"     # 6 minutes candles
