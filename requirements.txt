@@ -1,2 +1,6 @@
 websocket-client
 requests
+pandas
+requests
+python-telegram-bot
+ta
