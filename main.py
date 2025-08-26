@@ -13,8 +13,8 @@ else:
     print("✅ API key loaded.")
 
 # Telegram Bot
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Assets
 ASSETS = [
@@ -79,8 +79,8 @@ def generate_signal(df):
 
 # ==================== Telegram ====================
 def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message}
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
         requests.post(url, data=payload)
     except Exception as e:
