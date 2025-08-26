@@ -1,7 +1,16 @@
-import requests
+
 import pandas as pd
-import time
 import os
+import requests
+import json
+import time
+
+# 🔍 Debug: check if API key is loaded
+api_key = os.getenv("DERIV_API_KEY")
+if not api_key:
+    print("❌ No API key found!")
+else:
+    print("✅ API key loaded.")
 
 # Telegram Bot
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
