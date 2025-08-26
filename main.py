@@ -1,376 +1,271 @@
-import os, json, statistics
-from typing import List, Optional, Tuple, Dict
+# main.py
+import os
+import json
+import tim
+import math
+from datetime import datetime, timezone
+from typing import List, Dict, Optional
+
 import websocket
+import pandas as pd
 
-from bot import send_telegram
+from bot import send_telegram_message, send_telegram_block
 
 # =========================
-# ENV & CONSTANTS
+# CONFIG
 # =========================
-DERIV_API_TOKEN = os.getenv("DERIV_API_TOKEN")
-DERIV_APP_ID    = os.getenv("DERIV_APP_ID", "1089")
-if not DERIV_API_TOKEN:
-    print("Missing DERIV_API_TOKEN")
-    raise SystemExit(0)
+DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089")  # public sample app_id; can be your own
+DERIV_API_TOKEN = os.getenv("DERIV_API_TOKEN")    # optional for public synthetic data, supported if you have it
 
-DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
-
-# Exact assets & TFs
 ASSETS = ["R_50", "R_75", "R_10", "1HZ75V", "1HZ100V", "1HZ150V"]
-TF_6M, TF_10M = 360, 600
-TIMEFRAMES = [TF_6M, TF_10M]
+TIMEFRAMES = {"6m": 360, "10m": 600}
+CANDLES_PER_REQUEST = 200  # enough to compute indicators robustly
 
-HISTORY_COUNT = 400
+# Range avoidance: require some slope on MA9 over last K bars
+SLOPE_LOOKBACK = 6
+MIN_REL_SLOPE = 0.0003  # 0.03% (gentle; raise to be stricter)
 
-# Range filter
-ATR_PERIOD = 14
-SLOPE_LOOKBACK = 10
-TREND_MIN_SLOPE_ATR_MULT = 0.25  # avoid ranging
-
-# Rejection tolerances
-DOJI_BODY_TO_RANGE_MAX = 0.20
-BODY_MAX_OF_RANGE      = 0.35
-PIN_TAIL_MIN_FRACTION  = 0.66
-REJECT_ATR_TOL         = 0.05   # near-miss distance to MA allowed (fraction of ATR)
+# Rejection proximity to MA for "touch" (as fraction of price)
+MA_TOUCH_TOL = 0.0015  # 0.15%
 
 # =========================
-# UTIL / WS
+# WEBSOCKET / DATA
 # =========================
-def ws_call(payload: dict) -> dict:
-    ws = websocket.create_connection(DERIV_WS_URL, timeout=20)
+DERIV_WS = f"wss://ws.deriv.com/websockets/v3?app_id={DERIV_APP_ID}"
+
+def ws_request(payload: dict) -> dict:
+    """
+    Open a short-lived WS, (optionally) authorize, send payload, return JSON response.
+    Designed for ticks_history style requests.
+    """
+    ws = websocket.create_connection(DERIV_WS, timeout=20)
     try:
-        ws.send(json.dumps({"authorize": DERIV_API_TOKEN}))
-        ws.recv()  # auth response
+        if DERIV_API_TOKEN:
+            ws.send(json.dumps({"authorize": DERIV_API_TOKEN}))
+            auth = json.loads(ws.recv())
+            if "error" in auth:
+                raise RuntimeError(f"Authorize failed: {auth['error']}")
         ws.send(json.dumps(payload))
-        data = json.loads(ws.recv())
-        return data
+        raw = json.loads(ws.recv())
+        if "error" in raw:
+            raise RuntimeError(f"Deriv error: {raw['error']}")
+        return raw
     finally:
-        ws.close()
-
-def get_candles(symbol: str, granularity: int, count: int) -> List[dict]:
-    resp = ws_call({"candles": symbol, "granularity": granularity, "count": count})
-    arr = resp.get("candles", [])
-    return sorted(arr, key=lambda x: x["epoch"])
-
-def typical_price(c):  # HLC/3
-    return (float(c["h"]) + float(c["l"]) + float(c["c"])) / 3.0
-
-def sma(values: List[float], period: int) -> List[Optional[float]]:
-    out, q, s = [], [], 0.0
-    for v in values:
-        q.append(v); s += v
-        if len(q) > period:
-            s -= q.pop(0)
-        out.append(s/period if len(q)==period else None)
-    return out
-
-def smma(values: List[float], period: int) -> List[Optional[float]]:
-    out = [None]*len(values)
-    if len(values) < period: return out
-    seed = sum(values[:period]) / period
-    out[period-1] = seed
-    prev = seed
-    for i in range(period, len(values)):
-        prev = (prev*(period-1) + values[i]) / period
-        out[i] = prev
-    return out
-
-def true_range(prev_close, high, low):
-    return max(high - low, abs(high - prev_close), abs(prev_close - low))
-
-def atr(candles: List[dict], period: int) -> List[Optional[float]]:
-    if len(candles) < period + 1: return [None]*len(candles)
-    trs = [None]
-    for i in range(1, len(candles)):
-        prev_c = float(candles[i-1]["c"])
-        h = float(candles[i]["h"]); l = float(candles[i]["l"])
-        trs.append(true_range(prev_c, h, l))
-    tr_vals = trs[1:]
-    return smma(tr_vals, period)
-
-# =========================
-# CANDLE / PATTERN CHECKS
-# =========================
-def is_bullish(c): return float(c["c"]) > float(c["o"])
-def is_bearish(c): return float(c["c"]) < float(c["o"])
-
-def is_doji(c):
-    o = float(c["o"]); cl = float(c["c"]); h=float(c["h"]); l=float(c["l"])
-    rng = max(h-l, 1e-9)
-    return abs(cl-o) <= DOJI_BODY_TO_RANGE_MAX * rng
-
-def is_pin_bar(c, bullish=True):
-    o = float(c["o"]); cl = float(c["c"]); h=float(c["h"]); l=float(c["l"])
-    rng = max(h-l, 1e-9)
-    body = abs(cl-o)
-    if body > BODY_MAX_OF_RANGE * rng: return False
-    upper = h - max(o, cl)
-    lower = min(o, cl) - l
-    if bullish:
-        return lower >= PIN_TAIL_MIN_FRACTION * rng and upper <= (1-PIN_TAIL_MIN_FRACTION)*rng
-    else:
-        return upper >= PIN_TAIL_MIN_FRACTION * rng and lower <= (1-PIN_TAIL_MIN_FRACTION)*rng
-
-def pivot_high(candles, i, L=2, R=2):
-    if i < L or i+R >= len(candles): return False
-    val = float(candles[i]["h"])
-    for j in range(i-L, i+R+1):
-        if j==i: continue
-        if float(candles[j]["h"]) >= val: return False
-    return True
-
-def pivot_low(candles, i, L=2, R=2):
-    if i < L or i+R >= len(candles): return False
-    val = float(candles[i]["l"])
-    for j in range(i-L, i+R+1):
-        if j==i: continue
-        if float(candles[j]["l"]) <= val: return False
-    return True
-
-def detect_double_top_bottom(candles):
-    pivH = [(i, float(c["h"])) for i,c in enumerate(candles) if pivot_high(candles, i)]
-    pivL = [(i, float(c["l"])) for i,c in enumerate(candles) if pivot_low(candles, i)]
-    dt = db = None
-    if len(pivH) >= 2:
-        i1,p1 = pivH[-2]; i2,p2 = pivH[-1]
-        if abs(p1-p2)/max((p1+p2)/2.0,1e-9) <= 0.0015 and (i2-i1) >= 5:
-            dt = (i1,i2,(p1+p2)/2.0)
-    if len(pivL) >= 2:
-        i1,p1 = pivL[-2]; i2,p2 = pivL[-1]
-        if abs(p1-p2)/max((p1+p2)/2.0,1e-9) <= 0.0015 and (i2-i1) >= 5:
-            db = (i1,i2,(p1+p2)/2.0)
-    return dt, db
-
-def detect_triangles(candles):
-    n = len(candles)
-    if n < 40: return (False, False)
-    H = [float(c["h"]) for c in candles[-30:]]
-    L = [float(c["l"]) for c in candles[-30:]]
-    mH = sum(H)/len(H); mL = sum(L)/len(L)
-    flat_low  = statistics.pstdev(L) <= mL*0.001
-    flat_high = statistics.pstdev(H) <= mH*0.001
-    lower_highs = all(H[i] > H[i+1] for i in range(len(H)-1))
-    higher_lows = all(L[i] < L[i+1] for i in range(len(L)-1))
-    descending = flat_low and lower_highs
-    ascending  = flat_high and higher_lows
-    return ascending, descending
-
-def detect_head_shoulders(candles):
-    n = len(candles)
-    if n < 50: return (False, False)
-    highs = [float(c["h"]) for c in candles]
-    lows  = [float(c["l"]) for c in candles]
-    pivH = [i for i in range(2, n-2) if pivot_high(candles, i)]
-    pivL = [i for i in range(2, n-2) if pivot_low(candles, i)]
-    reg = inv = False
-    if len(pivH) >= 3:
-        a,b,c = pivH[-3], pivH[-2], pivH[-1]
-        if highs[b] > highs[a] and highs[b] > highs[c] and abs(highs[a]-highs[c]) / max(highs[b],1e-9) < 0.02:
-            reg = True
-    if len(pivL) >= 3:
-        a,b,c = pivL[-3], pivL[-2], pivL[-1]
-        if lows[b] < lows[a] and lows[b] < lows[c] and abs(lows[a]-lows[c]) / max(abs(lows[b]),1e-9) < 0.02:
-            inv = True
-    return reg, inv
-
-# =========================
-# STRATEGY CORE
-# =========================
-def analyze_symbol_tf(symbol: str, tf: int) -> Tuple[str, Optional[str]]:
-    """
-    Returns (signal, message)
-    signal in {"BUY","SELL","NONE"}
-    message is the formatted explanation for Telegram if BUY/SELL
-    """
-    candles = get_candles(symbol, tf, HISTORY_COUNT)
-    if len(candles) < 60: return "NONE", None
-
-    closes = [float(c["c"]) for c in candles]
-    highs  = [float(c["h"]) for c in candles]
-    lows   = [float(c["l"]) for c in candles]
-    typ    = [typical_price(c) for c in candles]
-
-    # MAs: MA1 = SMMA(9) on typical, MA2 = SMMA(19) on close, MA3 = SMA(25) on MA2 (previous indicator)
-    ma1 = smma(typ, 9)
-    ma2 = smma(closes, 19)
-    ma2_filled = ma2[:]
-    fv = next((i for i,v in enumerate(ma2_filled) if v is not None), None)
-    if fv is None: return "NONE", None
-    for i in range(fv):  # forward-fill to allow SMA(25) start
-        ma2_filled[i] = ma2_filled[fv]
-    ma3 = sma(ma2_filled, 25)
-
-    atr_vals = atr(candles, ATR_PERIOD)
-    # Range filter: compare MA1 slope to ATR
-    last_i = len(candles) - 1
-    idxs = [i for i in range(last_i - SLOPE_LOOKBACK, last_i + 1) if i >= 0 and ma1[i] is not None]
-    if len(idxs) < 2: return "NONE", None
-    slope = ma1[idxs[-1]] - ma1[idxs[0]]
-    atr_now = atr_vals[-1] if len(atr_vals)>0 else None
-    if (atr_now is None) or (abs(slope) < TREND_MIN_SLOPE_ATR_MULT * atr_now):
-        return "NONE", None  # avoid ranging markets
-
-    last_close = closes[-1]
-    last_ma1, last_ma2, last_ma3 = ma1[-1], ma2[-1], ma3[-1]
-
-    # "MA1 nearest to price"
-    def dist(a, b): return abs(a-b) if (a is not None and b is not None) else 1e9
-    ma1_nearest = dist(last_close, last_ma1) <= min(dist(last_close, last_ma2), dist(last_close, last_ma3))
-
-    # Uptrend/Downtrend stacking (as described)
-    uptrend   = ma1_nearest and (last_ma2 is not None and last_ma3 is not None) and (last_ma1 > last_ma2 > last_ma3)
-    downtrend = ma1_nearest and (last_ma2 is not None and last_ma3 is not None) and (last_ma1 < last_ma2 < last_ma3)
-
-    # Work with last two completed bars: [-2] rejection candlestick, [-1] confirmation
-    rej = candles[-2]; conf = candles[-1]
-
-    def reject_towards(ma_val, side: str) -> bool:
-        if ma_val is None: return False
-        o=float(rej["o"]); c=float(rej["c"]); h=float(rej["h"]); l=float(rej["l"])
-        touched = (l <= ma_val <= h) or (min(o,c) <= ma_val <= max(o,c))
-        near = False
-        if atr_vals[-2] is not None:
-            near = min(abs(h-ma_val), abs(l-ma_val), abs(c-ma_val), abs(o-ma_val)) <= REJECT_ATR_TOL * atr_vals[-2]
-        # candlestick type
-        is_rej_candle = is_doji(rej) or is_pin_bar(rej, True) or is_pin_bar(rej, False)
-        if side == "buy":
-            # rejection must close ABOVE the MA being tested
-            return is_rej_candle and (c >= ma_val) and (touched or near)
-        else:
-            # rejection must close BELOW the MA being tested
-            return is_rej_candle and (c <= ma_val) and (touched or near)
-
-    # Confirmation candle must close on same side of the MA
-    def confirm_on(ma_val, direction: str) -> bool:
-        if ma_val is None: return False
-        cc = float(conf["c"]); oo=float(conf["o"])
-        if direction == "buy":
-            return (cc >= ma_val) and (cc > oo)  # bullish
-        else:
-            return (cc <= ma_val) and (cc < oo)  # bearish
-
-    # Break & Retest dynamic behavior around MA1/MA2 within last few bars
-    def crossed_back(series_ma, direction: str) -> bool:
-        look = 6
-        for i in range(len(candles)-look-1, len(candles)-2):
-            if i < 1: continue
-            m0 = series_ma[i-1]; m1 = series_ma[i]
-            if m0 is None or m1 is None: continue
-            pc_prev = float(candles[i-1]["c"]); pc = float(candles[i]["c"])
-            if direction == "buy"  and (pc_prev < m0 and pc > m1): return True
-            if direction == "sell" and (pc_prev > m0 and pc < m1): return True
-        return False
-
-    signal = "NONE"; used_ma = None
-
-    if uptrend:
-        # MA1 preferred, then MA2
-        if reject_towards(ma1[-2], "buy") and confirm_on(ma1[-2], "buy") and crossed_back(ma1, "buy"):
-            signal, used_ma = "BUY", "MA1"
-        elif reject_towards(ma2[-2], "buy") and confirm_on(ma2[-2], "buy") and crossed_back(ma2, "buy"):
-            signal, used_ma = "BUY", "MA2"
-
-    if signal == "NONE" and downtrend:
-        if reject_towards(ma1[-2], "sell") and confirm_on(ma1[-2], "sell") and crossed_back(ma1, "sell"):
-            signal, used_ma = "SELL", "MA1"
-        elif reject_towards(ma2[-2], "sell") and confirm_on(ma2[-2], "sell") and crossed_back(ma2, "sell"):
-            signal, used_ma = "SELL", "MA2"
-
-    if signal == "NONE":
-        return "NONE", None
-
-    # Chart pattern alignment (heuristics)
-    asc, desc = detect_triangles(candles)
-    dt, db   = detect_double_top_bottom(candles)
-    hs, ihs  = detect_head_shoulders(candles)
-
-    pattern_ok = True
-    patterns = []
-    if signal == "BUY":
-        if asc: patterns.append("Ascending Triangle")
-        if db:  patterns.append("Double Bottom")
-        if ihs: patterns.append("Inverse H&S")
-        # invalidate if bearish structures appear
-        if (dt is not None) or desc or hs:
-            pattern_ok = False
-    else:
-        if desc: patterns.append("Descending Triangle")
-        if dt:   patterns.append("Double Top")
-        if hs:   patterns.append("Head & Shoulders")
-        # invalidate if bullish structures appear
-        if (db is not None) or asc or ihs:
-            pattern_ok = False
-
-    if not pattern_ok:
-        return "NONE", None
-
-    # TP zone via nearest swing S/R
-    def nearest_sr(direction: str) -> Optional[float]:
-        ph = [(i, float(c["h"])) for i,c in enumerate(candles) if pivot_high(candles, i)]
-        pl = [(i, float(c["l"])) for i,c in enumerate(candles) if pivot_low(candles, i)]
-        last_c = float(candles[-1]["c"])
-        if direction == "buy":
-            above = [p for _,p in ph if p > last_c]
-            return min(above) if above else None
-        else:
-            below = [p for _,p in pl if p < last_c]
-            return max(below) if below else None
-
-    tp = nearest_sr("buy" if signal=="BUY" else "sell")
-    tf_lbl = "6m" if tf == TF_6M else "10m"
-    price_now = float(candles[-1]["c"])
-    patt_txt = (", ".join(patterns)) if patterns else "MA confluence"
-    tp_txt = f"{tp:.2f}" if tp else "—"
-
-    msg = (
-        f"📊 <b>{symbol}</b> | TF <b>{tf_lbl}</b>\n"
-        f"Signal: <b>{signal}</b>\n"
-        f"Reason: {patt_txt} + rejection on <b>{used_ma}</b> (with confirmation)\n"
-        f"Price: {price_now:.2f}\n"
-        f"TP zone: {tp_txt}"
-    )
-    return signal, msg
-
-# =========================
-# MTF ORCHESTRATOR
-# =========================
-def analyze_symbol_both_tfs(symbol: str) -> Optional[str]:
-    r6  = analyze_symbol_tf(symbol, TF_6M)
-    r10 = analyze_symbol_tf(symbol, TF_10M)
-    sig6, msg6 = r6
-    sig10, msg10 = r10
-
-    # strong agreement
-    if sig6 == sig10 and sig6 in ("BUY","SELL"):
-        label = "🔥 STRONG BUY" if sig6 == "BUY" else "🔥 STRONG SELL"
-        parts = [f"{label} — <b>{symbol}</b> (6m + 10m agree)"]
-        if msg6:  parts.append("— 6m —\n" + msg6)
-        if msg10: parts.append("— 10m —\n" + msg10)
-        return "\n\n".join(parts)
-
-    # no agreement → still report valid TF signals
-    pieces = []
-    if sig6 in ("BUY","SELL") and msg6:   pieces.append(msg6)
-    if sig10 in ("BUY","SELL") and msg10: pieces.append(msg10)
-    return "\n\n".join(pieces) if pieces else None
-
-# =========================
-# MAIN
-# =========================
-def main():
-    all_msgs = []
-    for sym in ASSETS:
         try:
-            txt = analyze_symbol_both_tfs(sym)
-            if txt:
-                all_msgs.append(txt)
-        except Exception as e:
-            print(f"Error analyzing {sym}: {e}")
+            ws.close()
+        except Exception:
+            pass
 
-    if all_msgs:  # only send when signal(s) valid
-        send_telegram("✅ <b>Signals</b>\n\n" + "\n\n".join(all_msgs))
+def fetch_candles(symbol: str, granularity: int, count: int) -> pd.DataFrame:
+    """
+    Returns pandas DataFrame with columns: time, open, high, low, close (floats), epoch (int)
+    """
+    req = {
+        "ticks_history": symbol,
+        "end": "latest",
+        "count": count,
+        "style": "candles",
+        "granularity": granularity
+    }
+    data = ws_request(req)
+    candles = data.get("candles", [])
+    if not candles:
+        return pd.DataFrame()
+    df = pd.DataFrame(candles)
+    # normalize types
+    for col in ("open", "high", "low", "close"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce").astype("int64")
+    df["time"] = pd.to_datetime(df["epoch"], unit="s", utc=True)
+    return df[["time", "epoch", "open", "high", "low", "close"]]
+
+# =========================
+# INDICATORS
+# =========================
+def smma(series: pd.Series, period: int) -> pd.Series:
+    """
+    Smoothed Moving Average (SMMA) aka RMA/SMMA:
+    SMMA[i] = (SMMA[i-1]*(N-1) + price[i]) / N ; initialized with SMA of first N.
+    """
+    s = series.copy().astype(float)
+    out = pd.Series(index=s.index, dtype=float)
+    if len(s) < period:
+        return out
+    sma0 = s.iloc[:period].mean()
+    out.iloc[period-1] = sma0
+    alpha = 1.0 / period
+    for i in range(period, len(s)):
+        prev = out.iloc[i-1]
+        out.iloc[i] = prev + alpha * (s.iloc[i] - prev)
+    return out
+
+def sma(series: pd.Series, period: int) -> pd.Series:
+    return series.rolling(period).mean()
+
+def typical_price(df: pd.DataFrame) -> pd.Series:
+    return (df["high"] + df["low"] + df["close"]) / 3.0
+
+# =========================
+# CANDLE CLASSIFIERS
+# =========================
+def is_doji(o, h, l, c) -> bool:
+    body = abs(c - o)
+    rng = max(h - l, 1e-12)
+    return body <= 0.2 * rng  # body <= 20% of range
+
+def is_pinbar(o, h, l, c) -> (bool, str):
+    """
+    Returns (True, 'bull'/'bear') for pin bars.
+    bull-pin: long lower wick; bear-pin: long upper wick.
+    """
+    body = abs(c - o)
+    upper = h - max(o, c)
+    lower = min(o, c) - l
+    # Use 2x body as minimum wick dominance
+    if lower >= 2 * body and lower >= upper:
+        return True, "bull"
+    if upper >= 2 * body and upper >= lower:
+        return True, "bear"
+    return False, ""
+
+def is_inverted_pinbar(o, h, l, c) -> (bool, str):
+    # In practice same detection as pinbar but we’ll tag by wick side
+    return is_pinbar(o, h, l, c)
+
+def candle_rejection_type(row) -> Optional[str]:
+    o, h, l, c = row["open"], row["high"], row["low"], row["close"]
+    if is_doji(o, h, l, c):
+        return "doji"
+    pin, side = is_pinbar(o, h, l, c)
+    if pin:
+        return f"pin_{side}"
+    inv, side2 = is_inverted_pinbar(o, h, l, c)
+    if inv:
+        return f"inverted_{side2}"
+    return None
+
+# =========================
+# STRATEGY LOGIC
+# =========================
+def ma_order_state(ma1, ma2, ma3) -> str:
+    if ma1 > ma2 and ma2 > ma3:
+        return "up"
+    if ma1 < ma2 and ma2 < ma3:
+        return "down"
+    return "flat"
+
+def near_ma(price: float, ma: float, tol_frac: float) -> bool:
+    if ma == 0: 
+        return False
+    return abs(price - ma) / abs(ma) <= tol_frac
+
+def slope_ok(ma9: pd.Series) -> bool:
+    if ma9.isna().sum() > 0 or len(ma9) < SLOPE_LOOKBACK + 1:
+        return False
+    a = ma9.iloc[-SLOPE_LOOKBACK-1]
+    b = ma9.iloc[-1]
+    if a == 0 or pd.isna(a) or pd.isna(b):
+        return False
+    rel = abs((b - a) / a)
+    return rel >= MIN_REL_SLOPE
+
+def analyze_symbol_tf(df: pd.DataFrame, tf_label: str, symbol: str) -> Optional[str]:
+    """
+    Returns 'BUY' or 'SELL' or None for no signal on this timeframe.
+    Implements: single rejection candle (MA1/MA2) + immediate next-candle confirmation; trend-following; range filter.
+    """
+    if df.empty or len(df) < 60:
+        return None
+
+    # Indicators
+    tp = typical_price(df)
+    df["MA1"] = smma(tp, 9)            # smoothed 9 on typical price
+    df["MA2"] = smma(df["close"], 19)  # smoothed 19 on close
+    df["MA3"] = sma(df["MA2"], 25)     # simple 25 on previous indicator (MA2)
+
+    # need last two candles fully computed
+    last = df.iloc[-2]     # last closed candle
+    confirm = df.iloc[-1]  # the next (currently closed if GH Action runs post-close)
+
+    if any(pd.isna(last[["MA1", "MA2", "MA3"]])) or any(pd.isna(confirm[["MA1", "MA2", "MA3"]])):
+        return None
+
+    # Range filter via MA1 slope
+    if not slope_ok(df["MA1"]):
+        return None
+
+    trend = ma_order_state(last["MA1"], last["MA2"], last["MA3"])
+    if trend == "flat":
+        return None
+
+    # Rejection recognition on last closed candle
+    rej = candle_rejection_type(last)
+    if rej is None:
+        return None
+
+    # Check which MA is tested (MA1 or MA2), and apply rule side + close location
+    tested = None
+    # prefer closest between MA1 & MA2
+    dist1 = abs(last["close"] - last["MA1"])
+    dist2 = abs(last["close"] - last["MA2"])
+    candidate = "MA1" if dist1 <= dist2 else "MA2"
+    if near_ma(last["close"], last[candidate], MA_TOUCH_TOL) or near_ma((last["high"]+last["low"])/2.0, last[candidate], MA_TOUCH_TOL):
+        tested = candidate
     else:
-        print("No valid signals this run.")
+        # if not close, try the other
+        other = "MA2" if candidate == "MA1" else "MA1"
+        if near_ma(last["close"], last[other], MA_TOUCH_TOL) or near_ma((last["high"]+last["low"])/2.0, last[other], MA_TOUCH_TOL):
+            tested = other
+
+    if tested is None:
+        return None
+
+    # BUY logic (trend up): rejection candle must close ABOVE tested MA, and confirm candle bullish above that MA
+    if trend == "up":
+        if last["close"] >= last[tested]:
+            # next candle must be bullish and close above the same MA and above last high (confirmation)
+            if confirm["close"] > confirm["open"] and confirm["close"] >= confirm[tested] and confirm["close"] > last["high"]:
+                return "BUY"
+    # SELL logic (trend down): rejection candle must close BELOW tested MA, next candle bearish below that MA and below last low
+    if trend == "down":
+        if last["close"] <= last[tested]:
+            if confirm["close"] < confirm["open"] and confirm["close"] <= confirm[tested] and confirm["close"] < last["low"]:
+                return "SELL"
+
+    return None
+
+def run_once() -> None:
+    results: Dict[str, Dict[str, str]] = {}  # symbol -> {tf_label: signal}
+
+    for symbol in ASSETS:
+        symbol_signals: Dict[str, str] = {}
+        for tf_label, gran in TIMEFRAMES.items():
+            try:
+                df = fetch_candles(symbol, gran, CANDLES_PER_REQUEST)
+                sig = analyze_symbol_tf(df, tf_label, symbol)
+                if sig:
+                    symbol_signals[tf_label] = sig
+            except Exception as e:
+                print(f"{symbol} {tf_label} error: {e}")
+        if symbol_signals:
+            results[symbol] = symbol_signals
+
+    # Send messages
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if not results:
+        # silent by design; uncomment to always notify:
+        # send_telegram_message(f"ℹ️ {now} — No valid setups detected.")
+        return
+
+    for symbol, sigs in results.items():
+        sides = set(sigs.values())
+        if len(sides) == 1:
+            side = sides.pop()
+            labs = ", ".join(sorted(sigs.keys()))
+            send_telegram_message(f"🔔 STRONG {side} — {symbol} — {labs} — {now}")
+        else:
+            parts = ", ".join(f"{tf}:{side}" for tf, side in sorted(sigs.items()))
+            send_telegram_message(f"⚠️ WEAK/MIXED — {symbol} — {parts} — {now}")
 
 if __name__ == "__main__":
-    main()
+    run_once()
