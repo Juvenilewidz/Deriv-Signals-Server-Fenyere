@@ -1,31 +1,45 @@
 import requests
 import pandas as pd
-import numpy as np
-import datetime
+import time
 import os
 
-# Telegram setup
+# Telegram Bot
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Your assets
-ASSETS = ["R_10", "R_50", "R_75", "R_75_1s", "R_100_1s", "R_150_1s"]
+# Assets
+ASSETS = [
+    "R_10",
+    "R_50",
+    "R_75",
+    "R_75_1s",
+    "R_100_1s",
+    "R_150_1s"
+]
 
-# Moving Average period
-MA_PERIOD = 20
+# Timeframes in minutes
+TIMEFRAMES = [6, 10]
 
-# Get candles from Deriv API
+# ==================== Candle Fetch ====================
 def get_candles(symbol, timeframe=10, count=50):
-    url = "https://api.deriv.com/api/exchange/v1/candles"
+    url = "https://api.deriv.com/binary/v1"
     params = {
-        "symbol": symbol,
-        "granularity": timeframe * 60,  # seconds
+        "candles": symbol,
         "count": count,
+        "style": "candles",
+        "granularity": timeframe * 60
     }
     r = requests.get(url, params=params)
-    data = r.json()
-    if "candles" not in data:
+    try:
+        data = r.json()
+    except Exception as e:
+        print(f"❌ JSON error for {symbol}: {e}")
         return None
+
+    if "candles" not in data:
+        print(f"⚠️ No candle data for {symbol}")
+        return None
+
     df = pd.DataFrame(data["candles"])
     df["close"] = df["close"].astype(float)
     df["open"] = df["open"].astype(float)
@@ -33,74 +47,49 @@ def get_candles(symbol, timeframe=10, count=50):
     df["low"] = df["low"].astype(float)
     return df
 
-# Simple Moving Average
-def sma(series, period):
-    return series.rolling(period).mean()
+# ==================== Signal Logic ====================
+def generate_signal(df):
+    if df is None or len(df) < 20:
+        return None
 
-# Detect bullish/bearish engulfing + hammer/shooting star
-def detect_pattern(df):
+    # Moving Average
+    df["MA"] = df["close"].rolling(window=10).mean()
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    body_last = abs(last["close"] - last["open"])
-    body_prev = abs(prev["close"] - prev["open"])
-    wick_upper = last["high"] - max(last["close"], last["open"])
-    wick_lower = min(last["close"], last["open"]) - last["low"]
+    # Bullish rejection: candle closes above MA
+    if prev["close"] < prev["MA"] and last["close"] > last["MA"]:
+        return "Buy"
 
-    # Bullish Engulfing
-    if last["close"] > last["open"] and prev["close"] < prev["open"]:
-        if last["close"] > prev["open"] and last["open"] < prev["close"]:
-            return "bullish_engulfing"
-
-    # Bearish Engulfing
-    if last["close"] < last["open"] and prev["close"] > prev["open"]:
-        if last["close"] < prev["open"] and last["open"] > prev["close"]:
-            return "bearish_engulfing"
-
-    # Hammer (long lower wick, small body)
-    if wick_lower > 2 * body_last and body_last < (last["high"] - last["low"]) * 0.3:
-        return "hammer"
-
-    # Shooting star (long upper wick, small body)
-    if wick_upper > 2 * body_last and body_last < (last["high"] - last["low"]) * 0.3:
-        return "shooting_star"
+    # Bearish rejection: candle closes below MA
+    if prev["close"] > prev["MA"] and last["close"] < last["MA"]:
+        return "Sell"
 
     return None
 
-# Check for rejection at MA
-def check_signal(df, asset, timeframe):
-    df["MA"] = sma(df["close"], MA_PERIOD)
-    last = df.iloc[-1]
-    pattern = detect_pattern(df)
-
-    if not pattern:
-        return None
-
-    # Buy signal
-    if pattern in ["bullish_engulfing", "hammer"] and last["low"] <= last["MA"] and last["close"] > last["MA"]:
-        return f"📊{asset}\n⏰{timeframe}min\n🎯Buy"
-
-    # Sell signal
-    if pattern in ["bearish_engulfing", "shooting_star"] and last["high"] >= last["MA"] and last["close"] < last["MA"]:
-        return f"📊{asset}\n⏰{timeframe}min\n🎯Sell"
-
-    return None
-
-# Send to Telegram
+# ==================== Telegram ====================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message}
-    requests.post(url, data=payload)
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"❌ Telegram send failed: {e}")
 
+# ==================== Main Bot ====================
 def run_bot():
-    timeframes = [6, 10]  # min
     for asset in ASSETS:
-        for tf in timeframes:
-            df = get_candles(asset, timeframe=tf)
-            if df is not None and len(df) > MA_PERIOD:
-                signal = check_signal(df, asset, tf)
-                if signal:
-                    send_telegram(signal)
+        for tf in TIMEFRAMES:
+            df = get_candles(asset, tf)
+            signal = generate_signal(df)
+
+            if signal:
+                msg = f"📊 {asset}\n⏰ {tf}min\n🎯 {signal}"
+                print(msg)
+                send_telegram(msg)
+            else:
+                print(f"… No signal for {asset} ({tf}min)")
 
 if __name__ == "__main__":
     run_bot()
