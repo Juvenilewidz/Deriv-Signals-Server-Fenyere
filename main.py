@@ -378,7 +378,6 @@ def analyze_symbol_both_tfs(symbol: str) -> Optional[str]:
     # STRONG agreement
     if sig6 == sig10 and sig6 in ("BUY","SELL"):
         label = "🔥 STRONG BUY" if sig6 == "BUY" else "🔥 STRONG SELL"
-        # prefer to include both TF details below
         parts = [f"{label} — <b>{symbol}</b> (6m + 10m agree)"]
         if msg6:  parts.append("— 6m —\n" + msg6)
         if msg10: parts.append("— 10m —\n" + msg10)
