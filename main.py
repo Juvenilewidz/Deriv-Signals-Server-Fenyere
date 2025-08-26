@@ -31,15 +31,16 @@ TIMEFRAMES = [6, 10]
 
 # ==================== Candle Fetch ====================
 def get_candles(symbol, timeframe=10, count=50):
-    url = "https://api.deriv.com/binary/v1"
+    url = "https://api.deriv.com/v1/ohlc"
     params = {
-        "candles": symbol,
-        "count": count,
+        "ticks_history": symbol,   # asset name e.g. R_75
         "style": "candles",
-        "granularity": timeframe * 60
+        "granularity": timeframe * 60,  # minutes to seconds
+        "count": count
     }
     r = requests.get(url, params=params)
     try:
+        print(f"DEBUG Response for {symbol}: {r.text}")  # 👈 keep this
         data = r.json()
     except Exception as e:
         print(f"❌ JSON error for {symbol}: {e}")
@@ -55,7 +56,6 @@ def get_candles(symbol, timeframe=10, count=50):
     df["high"] = df["high"].astype(float)
     df["low"] = df["low"].astype(float)
     return df
-
 # ==================== Signal Logic ====================
 def generate_signal(df):
     if df is None or len(df) < 20:
