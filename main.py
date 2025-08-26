@@ -1,93 +1,106 @@
 import requests
 import pandas as pd
-import talib
-from datetime import datetime
+import numpy as np
+import datetime
+import os
 
-# ====== CONFIG ======
-DERIV_API_URL = "https://api.deriv.com/api/explorer"
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+# Telegram setup
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-ASSETS = {
-    "R_10": "Volatility 10",
-    "R_50": "Volatility 50",
-    "R_75": "Volatility 75",
-    "R_75_1s": "Volatility 75 (1s)",
-    "R_100_1s": "Volatility 100 (1s)",
-    "R_150_1s": "Volatility 150 (1s)"
-}
+# Your assets
+ASSETS = ["R_10", "R_50", "R_75", "R_75_1s", "R_100_1s", "R_150_1s"]
 
-TIMEFRAMES = {
-    "6m": 6,
-    "10m": 10
-}
+# Moving Average period
+MA_PERIOD = 20
 
-# ====== HELPERS ======
-def fetch_ohlc(symbol, minutes):
-    """Fetch OHLC data from Deriv API (last 200 candles)."""
-    url = f"https://api.deriv.com/api/explorer/ticks_history?ticks_history={symbol}&style=candles&granularity={minutes*60}&count=200"
-    resp = requests.get(url).json()
-    if "candles" not in resp:
+# Get candles from Deriv API
+def get_candles(symbol, timeframe=10, count=50):
+    url = "https://api.deriv.com/api/exchange/v1/candles"
+    params = {
+        "symbol": symbol,
+        "granularity": timeframe * 60,  # seconds
+        "count": count,
+    }
+    r = requests.get(url, params=params)
+    data = r.json()
+    if "candles" not in data:
         return None
-    df = pd.DataFrame(resp["candles"])
+    df = pd.DataFrame(data["candles"])
+    df["close"] = df["close"].astype(float)
     df["open"] = df["open"].astype(float)
     df["high"] = df["high"].astype(float)
     df["low"] = df["low"].astype(float)
-    df["close"] = df["close"].astype(float)
     return df
 
-def apply_strategy(df):
-    """Apply MA rejection + trend rule."""
-    if df is None or len(df) < 30:
-        return None
+# Simple Moving Average
+def sma(series, period):
+    return series.rolling(period).mean()
 
-    # Moving Averages
-    ma1 = talib.SMA((df["high"]+df["low"]+df["close"])/3, timeperiod=9)  # Smoothed approx
-    ma2 = talib.SMA(df["close"], timeperiod=19)  # Smoothed approx
-    ma3 = talib.SMA(ma2, timeperiod=25)  # Simple on MA2
+# Detect bullish/bearish engulfing + hammer/shooting star
+def detect_pattern(df):
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    # Last two candles
-    c1_open, c1_close, c1_high, c1_low = df.iloc[-2][["open", "close", "high", "low"]]
-    c2_open, c2_close = df.iloc[-1][["open", "close"]]
+    body_last = abs(last["close"] - last["open"])
+    body_prev = abs(prev["close"] - prev["open"])
+    wick_upper = last["high"] - max(last["close"], last["open"])
+    wick_lower = min(last["close"], last["open"]) - last["low"]
 
-    # Last MAs
-    ma1_last, ma2_last, ma3_last = ma1.iloc[-2], ma2.iloc[-2], ma3.iloc[-2]
+    # Bullish Engulfing
+    if last["close"] > last["open"] and prev["close"] < prev["open"]:
+        if last["close"] > prev["open"] and last["open"] < prev["close"]:
+            return "bullish_engulfing"
 
-    # Trend check
-    if ma1_last > ma2_last > ma3_last:  # Uptrend
-        if c1_low <= ma2_last <= c1_high and c1_close > ma2_last:  # Rejection candle
-            if c2_close > c2_open and c2_close > ma2_last:
-                return "Buy"
+    # Bearish Engulfing
+    if last["close"] < last["open"] and prev["close"] > prev["open"]:
+        if last["close"] < prev["open"] and last["open"] > prev["close"]:
+            return "bearish_engulfing"
 
-    if ma1_last < ma2_last < ma3_last:  # Downtrend
-        if c1_low <= ma2_last <= c1_high and c1_close < ma2_last:  # Rejection candle
-            if c2_close < c2_open and c2_close < ma2_last:
-                return "Sell"
+    # Hammer (long lower wick, small body)
+    if wick_lower > 2 * body_last and body_last < (last["high"] - last["low"]) * 0.3:
+        return "hammer"
+
+    # Shooting star (long upper wick, small body)
+    if wick_upper > 2 * body_last and body_last < (last["high"] - last["low"]) * 0.3:
+        return "shooting_star"
 
     return None
 
+# Check for rejection at MA
+def check_signal(df, asset, timeframe):
+    df["MA"] = sma(df["close"], MA_PERIOD)
+    last = df.iloc[-1]
+    pattern = detect_pattern(df)
+
+    if not pattern:
+        return None
+
+    # Buy signal
+    if pattern in ["bullish_engulfing", "hammer"] and last["low"] <= last["MA"] and last["close"] > last["MA"]:
+        return f"📊{asset}\n⏰{timeframe}min\n🎯Buy"
+
+    # Sell signal
+    if pattern in ["bearish_engulfing", "shooting_star"] and last["high"] >= last["MA"] and last["close"] < last["MA"]:
+        return f"📊{asset}\n⏰{timeframe}min\n🎯Sell"
+
+    return None
+
+# Send to Telegram
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    payload = {"chat_id": CHAT_ID, "text": message}
     requests.post(url, data=payload)
 
-# ====== MAIN LOOP ======
-def main():
-    for symbol, name in ASSETS.items():
-        results = {}
-
-        for label, minutes in TIMEFRAMES.items():
-            df = fetch_ohlc(symbol, minutes)
-            signal = apply_strategy(df)
-            results[label] = signal
-
-        # Only send if both timeframes agree
-        if results["6m"] and results["6m"] == results["10m"]:
-            msg = f"📊{name}\n⏰10min\n🎯{results['10m']}"
-            send_telegram(msg)
-            print(f"Signal sent: {msg}")
-        else:
-            print(f"No valid signal for {name}")
+def run_bot():
+    timeframes = [6, 10]  # min
+    for asset in ASSETS:
+        for tf in timeframes:
+            df = get_candles(asset, timeframe=tf)
+            if df is not None and len(df) > MA_PERIOD:
+                signal = check_signal(df, asset, tf)
+                if signal:
+                    send_telegram(signal)
 
 if __name__ == "__main__":
-    main()
+    run_bot()
