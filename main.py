@@ -31,16 +31,15 @@ TIMEFRAMES = [6, 10]
 
 # ==================== Candle Fetch ====================
 def get_candles(symbol, timeframe=10, count=50):
-    url = "https://api.deriv.com/v1/ohlc"
+    url = "https://api.deriv.com/api/v4/ohlc"  # ✅ correct endpoint
     params = {
-        "ticks_history": symbol,   # asset name e.g. R_75
-        "style": "candles",
-        "granularity": timeframe * 60,  # minutes to seconds
+        "symbol": symbol,
+        "granularity": timeframe * 60,  # seconds
         "count": count
     }
     r = requests.get(url, params=params)
     try:
-        print(f"DEBUG Response for {symbol}: {r.text}")  # 👈 keep this
+        print(f"DEBUG Response for {symbol}: {r.text[:200]}")  # first 200 chars
         data = r.json()
     except Exception as e:
         print(f"❌ JSON error for {symbol}: {e}")
