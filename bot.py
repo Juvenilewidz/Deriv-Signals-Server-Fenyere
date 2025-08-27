@@ -24,7 +24,14 @@ def send_telegram_message(token: str, chat_id: str, text: str) -> None:
     _tg_post(token, "sendMessage", {"chat_id": chat_id, "text": text})
 
 def send_single_timeframe_signal(token: str, chat_id: str, symbol: str, tf: int, direction: str):
-    msg = f"📈 {symbol} | TF {tf}s | {direction.upper()}"
+    def send_single_timeframe_signal(token: str, chat_id: str,
+                                 symbol: str, tf: int, direction: str,
+                                 reason: str = "") -> None:
+    tf_label = f"M{tf // 60}"
+    msg = f"📊 {symbol} | {tf_label}\nSignal: {direction}"
+    if reason:
+        msg += f"\nReason: {reason}"
+    send_telegram_message(token, chat_id, msg)
     send_telegram_message(token, chat_id, msg)
 
 def send_strong_signal(token: str, chat_id: str, symbol: str, direction: str, reason: str = ""):
