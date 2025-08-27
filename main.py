@@ -435,28 +435,35 @@ def analyze_and_notify():
             send_strong_signal(symbol, sig6)
 
         elif sig6 and not sig10:
-            send_single_timeframe_signal(symbol, 360, sig6)
+            send_single_timeframe_signal(symbol, 360, sig6, "M6", sig6)
 
         elif sig10 and not sig6:
-def send_single_timeframe_signal(symbol, tf, signal, direction):
+            send_single_timeframe_signal(symbol, 600, sig10, "M10", sig10)
 
         else:
             # Either both None or conflict (BUY vs SELL) -> no alert
             pass
 
 
+# 👇 Define this OUTSIDE the function
+def send_single_timeframe_signal(symbol, tf, signal, tf_label, direction):
+    message = f"📊 {symbol} | {tf_label}\nSignal: {signal}\nDirection: {direction}"
+    send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message)
+
+
 if __name__ == "__main__":
     try:
-        # Run once to confirm bot is alive
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
             send_telegram_message(
                 TELEGRAM_BOT_TOKEN,
                 TELEGRAM_CHAT_ID,
                 "✅ Bot started successfully and is now live!"
             )
-
-        # Then do analysis
         analyze_and_notify()
+    except Exception as e:
+        print(f"Error: {e}")
+
+        # Then do analysis======================================================================
 
     except Exception as e:
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
