@@ -3,6 +3,7 @@ import os
 import json
 import math
 import time
+import numpy as np
 from logger import logger
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
@@ -280,6 +281,92 @@ def signal_for_timeframe(candles: List[Dict]) -> Optional[str]:
     return None
 
 # ==========================
+
+# ========================
+# Helper functions
+# ========================
+
+def smoothed_ma(values, period):
+    """Smoothed moving average (approximation)."""
+    sma = np.mean(values[:period])
+    result = [sma]
+    for i in range(period, len(values)):
+        prev = result[-1]
+        new_val = (prev * (period - 1) + values[i]) / period
+        result.append(new_val)
+    # pad beginning
+    return [None]*(len(values)-len(result)) + result
+
+def simple_ma(values, period):
+    """Simple moving average."""
+    return [None if i < period-1 else np.mean(values[i-period+1:i+1]) for i in range(len(values))]
+
+def is_rejection(candle, ma1, ma2, direction):
+    """Check if candle is a rejection candle near MA1 or MA2."""
+    o, h, l, c = candle['open'], candle['high'], candle['low'], candle['close']
+
+    # Near which MA?
+    target_ma = ma1 if abs(c - ma1) < abs(c - ma2) else ma2
+
+    # BUY rejection
+    if direction == "BUY":
+        # rejection candle must close ABOVE MA
+        if c < target_ma: 
+            return False
+        body = abs(c - o)
+        wick_low = min(o, c) - l
+        return wick_low > body and body > 0  # pinbar/hammer style
+
+    # SELL rejection
+    if direction == "SELL":
+        if c > target_ma: 
+            return False
+        body = abs(c - o)
+        wick_high = h - max(o, c)
+        return wick_high > body and body > 0
+
+    return False
+
+# ========================
+# Main signal function
+# ========================
+
+def signal_for_timeframe(candles):
+    """
+    ASPMI strategy for one timeframe.
+    candles: list of dicts with keys open, high, low, close
+    """
+    if len(candles) < 30:
+        return None
+
+    closes = [c['close'] for c in candles]
+    highs  = [c['high'] for c in candles]
+    lows   = [c['low']  for c in candles]
+
+    typical = [(h+l+c)/3 for h,l,c in zip(highs, lows, closes)]
+
+    # Calculate MAs
+    ma1 = smoothed_ma(typical, period=9)
+    ma2 = smoothed_ma(closes, period=19)
+    ma3 = simple_ma(ma2, period=25)
+
+    prev, last = candles[-2], candles[-1]
+    ma1_val, ma2_val, ma3_val = ma1[-1], ma2[-1], ma3[-1]
+
+    # UP trend → possible BUY
+    if ma1_val and ma2_val and ma3_val and ma1_val > ma2_val > ma3_val:
+        if is_rejection(prev, ma1_val, ma2_val, "BUY"):
+            if last['close'] > last['open'] and last['close'] > ma1_val:
+                return "BUY"
+
+    # DOWN trend → possible SELL
+    if ma1_val and ma2_val and ma3_val and ma1_val < ma2_val < ma3_val:
+        if is_rejection(prev, ma1_val, ma2_val, "SELL"):
+            if last['close'] < last['open'] and last['close'] < ma1_val:
+                return "SELL"
+
+    return None
+
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
 # ==========================
