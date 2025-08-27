@@ -1,43 +1,25 @@
 # bot.py
-import requests
-import os
-from typing import Dict, Any
+import json
+import urllib.parse
+import urllib.request
 
-# Telegram send utility
-def send_telegram_message(bot_token: str, chat_id: str, text: str):
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    try:
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"Failed to send telegram message: {e}")
+def _tg_post(token: str, method: str, payload: dict) -> None:
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    data = urllib.parse.urlencode(payload).encode()
+    req = urllib.request.Request(url, data=data)
+    with urllib.request.urlopen(req, timeout=15) as _:
+        pass  # best-effort; ignore body
 
+def send_telegram_message(token: str, chat_id: str, text: str) -> None:
+    _tg_post(token, "sendMessage", {"chat_id": chat_id, "text": text})
 
-# ============ SIGNAL FUNCTIONS ============
+def send_single_timeframe_signal(token: str, chat_id: str, symbol: str, tf: int, direction: str):
+    msg = f"📈 {symbol} | TF {tf}s | {direction.upper()}"
+    send_telegram_message(token, chat_id, msg)
 
-# Single timeframe signal
-def send_single_timeframe_signal(bot_token: str, chat_id: str, symbol: str, timeframe: str, signal: Dict[str, Any]):
-    """
-    Sends a trading signal based on a single timeframe analysis.
-    """
-    text = (
-        f"📊 *Single-Timeframe Signal*\n"
-        f"Symbol: `{symbol}`\n"
-        f"Timeframe: `{timeframe}`\n"
-        f"Signal: *{signal['type'].upper()}*\n"
-        f"Reason: {signal.get('reason', 'N/A')}\n"
-    )
-    send_telegram_message(bot_token, chat_id, text)
+def send_strong_signal(token: str, chat_id: str, symbol: str, direction: str, reason: str = ""):
+    msg = f"💥 STRONG {direction.upper()} | {symbol}" + (f"\n{reason}" if reason else "")
+    send_telegram_message(token, chat_id, msg)
 
-
-# Multi-timeframe / Strong confluence signal
-def send_strongs_signal(bot_token: str, chat_id: str, symbol: str, signals: Dict[str, Any]):
-    """
-    Sends a 'strong' signal when multiple timeframe confirmations align.
-    """
-    text = f"🚀 *Strong Multi-Timeframe Signal*\nSymbol: `{symbol}`\n\n"
-    for tf, sig in signals.items():
-        text += f"TF {tf}: *{sig['type'].upper()}* ({sig.get('reason', 'N/A')})\n"
-
-    send_telegram_message(bot_token, chat_id, text)
+# Backward-compat for earlier import typo
+send_strongs_signal = send_strong_signal
