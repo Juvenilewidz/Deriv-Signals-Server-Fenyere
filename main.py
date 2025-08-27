@@ -282,6 +282,9 @@ def signal_for_timeframe(candles: List[Dict]) -> Optional[str]:
 # ==========================
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
+# ==========================
+# Orchestrate: per asset, both TFs, resolve conflicts, notify
+# ==========================
 def analyze_and_notify():
     for symbol in ASSETS:
         results: Dict[int, Optional[str]] = {}
@@ -298,11 +301,13 @@ def analyze_and_notify():
         if sig6 and sig10 and sig6 == sig10:
             # Strong signal (agreement)
             send_strong_signal(symbol, sig6)
+
         elif sig6 and not sig10:
             send_single_timeframe_signal(symbol, 360, sig6)
+
         elif sig10 and not sig6:
-             signal = your_signal_function(symbol, tf)
-           send_single_timeframe_signal(symbol, 600, signal, tf, direction)
+            send_single_timeframe_signal(symbol, 600, sig10)
+
         else:
             # Either both None or conflict (BUY vs SELL) -> no alert
             pass
