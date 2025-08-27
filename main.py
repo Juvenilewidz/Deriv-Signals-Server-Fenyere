@@ -246,7 +246,12 @@ def choose_rejected_ma(ma1_val: float, ma2_val: float, candle: Dict) -> Tuple[st
         return ("MA1", ma1_val)
     return ("MA2", ma2_val)
 
-def signal_for_timeframe(candles: List[Dict]) -> Optional[str]:
+from typing import Optional, Tuple
+SignalResult = Tuple[Optional[str], Optional[str]]  # (direction, reason)
+
+def signal_for_timeframe(candles) -> SignalResult:
+    ...
+    return None, None
     """
     Returns "BUY", "SELL" or None based on the last two candles:
     - rejection_candle = candles[-2]
@@ -414,7 +419,32 @@ def analyze_and_notify():
             # ❌ No valid signal (either conflict or None)
             pass
 
-# ==========================
+# =======================================================================================================
+def analyze_and_notify():
+    for symbol in ASSETS:
+        results = {}
+        for tf in TIMEFRAMES:
+            candles = fetch_candles(symbol, tf, CANDLES_N)
+            if not candles:
+                results[tf] = (None, None)
+                continue
+            sig, reason = signal_for_timeframe(candles)
+            results[tf] = (sig, reason)
+
+        (sig6, r6)  = results.get(360, (None, None))
+        (sig10, r10)= results.get(600, (None, None))
+
+        if sig6 and sig10 and sig6 == sig10:
+            combo_reason = f"M6: {r6 or '-'} | M10: {r10 or '-'}"
+            send_strong_signal(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, symbol, sig6, combo_reason)
+
+        elif sig6 and not sig10:
+            send_single_timeframe_signal(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, symbol, 360, sig6, r6 or "")
+
+        elif sig10 and not sig6:
+            send_single_timeframe_signal(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, symbol, 600, sig10, r10 or "")
+
+
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
 def analyze_and_notify():
