@@ -33,3 +33,22 @@ def send_strong_signal(token: str, chat_id: str, symbol: str, direction: str, re
 
 # Backward-compat for earlier import typo
 send_strongs_signal = send_strong_signal
+#
+
+# ====== Reasoning ============
+def send_single_timeframe_signal(token: str, chat_id: str,
+                                 symbol: str, tf: int, direction: str,
+                                 reason: str = "") -> None:
+    tf_label = f"M{tf // 60}"
+    msg = f"📊 {symbol} | {tf_label}\nSignal: {direction}"
+    if reason:
+        msg += f"\nReason: {reason}"
+    send_telegram_message(token, chat_id, msg)
+
+def send_strong_signal(token: str, chat_id: str,
+                       symbol: str, direction: str,
+                       reason: str = "") -> None:
+    msg = f"💥 STRONG {direction.upper()} | {symbol}"
+    if reason:
+        msg += f"\nReason: {reason}"
+    send_telegram_message(token, chat_id, msg)
