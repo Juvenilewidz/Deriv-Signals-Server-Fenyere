@@ -301,6 +301,7 @@ def analyze_and_notify():
         elif sig6 and not sig10:
             send_single_timeframe_signal(symbol, 360, sig6)
         elif sig10 and not sig6:
+            signal = your_signal_function(symbol, tf)
            send_single_timeframe_signal(symbol, 600, signal, tf, direction)
         else:
             # Either both None or conflict (BUY vs SELL) -> no alert
