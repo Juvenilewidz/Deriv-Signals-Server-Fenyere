@@ -3,6 +3,7 @@ import os
 import json
 import math
 import time
+from logger import logger
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
