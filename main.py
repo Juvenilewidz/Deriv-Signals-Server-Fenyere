@@ -159,7 +159,7 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
     ws = websocket.create_connection(DERIV_WS_URL, timeout=12)
     try:
         # Authorize
-        ws.send(json.dumps({"authorize": DERIV_API_TOKEN}))
+        ws.send(json.dumps({"authorize": DERIV_API_KEY}))
         _ = json.loads(ws.recv())
 
         # Request candles
