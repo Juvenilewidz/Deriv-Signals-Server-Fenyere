@@ -1,4 +1,3 @@
-
 # main.py
 import os
 import json
@@ -8,33 +7,19 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
 import websocket  # pip install websocket-client
-from bot import send_single_timeframe_signal, send_strongs_signal, send_telegram_message
 
-def main():
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-    DERIV_API_KEY = os.getenv("DERIV_API_KEY")
+from bot import (
+    send_single_timeframe_signal,
+    send_strong_signal,           # note: no trailing "s"
+    send_telegram_message,
+)
 
-    # Confirm startup
+# -------- Env / constants --------
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+DERIV_API_KEY      = os.getenv("DERIV_API_KEY", "").strip()
+DERIV_APP_ID       = os.getenv("DERIV_APP_ID", "1089").strip()
 
-startup_flag = "/tmp/deriv_bot_started.flag"
-
-if not os.path.exists(startup_flag):
-    send_telegram_message(
-        TELEGRAM_BOT_TOKEN,
-        TELEGRAM_CHAT_ID,
-        "✅ Deriv Signal Bot started. Monitoring markets..."
-    )
-    # Create the flag so it doesn’t send again
-    with open(startup_flag, "w") as f:
-        f.write("started")
-    # rest of your signal logic continues here
-
-# ==========================
-# Deriv WebSocket config
-# ==========================
-DERIV_APP_ID   = os.getenv("DERIV_APP_ID", "1089").strip()
-DERIV_API_KEY = os.getenv("DERIV_API_KEY", "").strip()
 if not DERIV_API_KEY:
     raise RuntimeError("Missing DERIV_API_KEY env var")
 
@@ -324,3 +309,17 @@ if __name__ == "__main__":
     # Run once (GitHub Actions cron will execute every 10 minutes).
     # No startup spam here; only signals are sent.
     analyze_and_notify()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            # Best-effort crash notice so you know something went wrong
+            send_telegram_message(
+                TELEGRAM_BOT_TOKEN,
+                TELEGRAM_CHAT_ID,
+                f"❌ Bot crashed: {e}"
+            )
+        raise
