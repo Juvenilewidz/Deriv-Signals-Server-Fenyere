@@ -8,21 +8,26 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
 import websocket  # pip install websocket-client
+from bot import send_single_timeframe_signal, send_strongs_signal, send_telegram_message
 
-from bot import send_single_timeframe_signal, send_strong_signal
 def main():
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     DERIV_API_KEY = os.getenv("DERIV_API_KEY")
 
     # Confirm startup
+
+startup_flag = "/tmp/deriv_bot_started.flag"
+
+if not os.path.exists(startup_flag):
     send_telegram_message(
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
         "✅ Deriv Signal Bot started. Monitoring markets..."
     )
-
-    ...
+    # Create the flag so it doesn’t send again
+    with open(startup_flag, "w") as f:
+        f.write("started")
     # rest of your signal logic continues here
 
 # ==========================
