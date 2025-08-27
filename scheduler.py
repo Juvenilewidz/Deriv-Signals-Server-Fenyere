@@ -8,7 +8,7 @@ n = 0
 while time.time() < end:
     n += 1
     # run your existing script once (the one that posts a price to Telegram)
-    subprocess.run(["python", "main.py"], check=False)
+ subprocess.run(["python", "runner.py"], check=False)
     # wait for the next tick, unless we’re out of time
     remaining = end - time.time()
     if remaining > interval:
