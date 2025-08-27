@@ -1,43 +1,43 @@
-
 # bot.py
-import os
 import requests
+import os
+from typing import Dict, Any
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-
-if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    raise RuntimeError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID env vars")
-
-TG_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-
-SYMBOL_NAME = {
-    "R_10":     "Volatility 10",
-    "R_50":     "Volatility 50",
-    "R_75":     "Volatility 75",
-    "1HZ75V":   "Volatility 75 (1s)",
-    "1HZ100V":  "Volatility 100 (1s)",
-    "1HZ150V":  "Volatility 150 (1s)",
-}
-
-TF_LABEL = {
-    360: "6m",
-    600: "10m",
-}
-
-def _send(text: str):
+# Telegram send utility
+def send_telegram_message(bot_token: str, chat_id: str, text: str):
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     try:
-        requests.post(TG_URL, json={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=7)
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
     except Exception as e:
-        print("Telegram error:", e)
+        print(f"Failed to send telegram message: {e}")
 
-def send_single_timeframe_signal(symbol: str, timeframe_sec: int, direction: str):
-    name = SYMBOL_NAME.get(symbol, symbol)
-    tf   = TF_LABEL.get(timeframe_sec, f"{timeframe_sec}s")
-    msg  = f"📊 {name}\n⏰ {tf}\n🎯 {direction.title()}"
-    _send(msg)
 
-def send_strong_signal(symbol: str, direction: str):
-    name = SYMBOL_NAME.get(symbol, symbol)
-    msg  = f"📊 {name}\n⏰ 6m & 10m\n🎯 Strong {direction.title()} ✅"
-    _send(msg)
+# ============ SIGNAL FUNCTIONS ============
+
+# Single timeframe signal
+def send_single_timeframe_signal(bot_token: str, chat_id: str, symbol: str, timeframe: str, signal: Dict[str, Any]):
+    """
+    Sends a trading signal based on a single timeframe analysis.
+    """
+    text = (
+        f"📊 *Single-Timeframe Signal*\n"
+        f"Symbol: `{symbol}`\n"
+        f"Timeframe: `{timeframe}`\n"
+        f"Signal: *{signal['type'].upper()}*\n"
+        f"Reason: {signal.get('reason', 'N/A')}\n"
+    )
+    send_telegram_message(bot_token, chat_id, text)
+
+
+# Multi-timeframe / Strong confluence signal
+def send_strongs_signal(bot_token: str, chat_id: str, symbol: str, signals: Dict[str, Any]):
+    """
+    Sends a 'strong' signal when multiple timeframe confirmations align.
+    """
+    text = f"🚀 *Strong Multi-Timeframe Signal*\nSymbol: `{symbol}`\n\n"
+    for tf, sig in signals.items():
+        text += f"TF {tf}: *{sig['type'].upper()}* ({sig.get('reason', 'N/A')})\n"
+
+    send_telegram_message(bot_token, chat_id, text)
