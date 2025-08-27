@@ -298,8 +298,19 @@ def smoothed_ma(values, period):
     return [None]*(len(values)-len(result)) + result
 
 def simple_ma(values, period):
-    """Simple moving average."""
-    return [None if i < period-1 else np.mean(values[i-period+1:i+1]) for i in range(len(values))]
+    """Simple moving average that ignores None values safely."""
+    result = []
+    for i in range(len(values)):
+        if i < period - 1:
+            result.append(None)
+        else:
+            # collect last `period` values, ignoring None
+            window = [v for v in values[i-period+1:i+1] if v is not None]
+            if len(window) == period:
+                result.append(np.mean(window))
+            else:
+                result.append(None)
+    return result
 
 def is_rejection(candle, ma1, ma2, direction):
     """Check if candle is a rejection candle near MA1 or MA2."""
