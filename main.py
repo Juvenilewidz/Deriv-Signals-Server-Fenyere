@@ -10,7 +10,20 @@ from typing import List, Dict, Optional, Tuple
 import websocket  # pip install websocket-client
 
 from bot import send_single_timeframe_signal, send_strong_signal
+def main():
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    deriv_api_key = os.getenv("DERIV_API_KEY")
 
+    # Confirm startup
+    send_telegram_message(
+        telegram_token,
+        telegram_chat_id,
+        "✅ Deriv Signal Bot started. Monitoring markets..."
+    )
+
+    ...
+    # rest of your signal logic continues here
 
 # ==========================
 # Deriv WebSocket config
