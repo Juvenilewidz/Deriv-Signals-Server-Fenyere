@@ -11,14 +11,14 @@ import websocket  # pip install websocket-client
 
 from bot import send_single_timeframe_signal, send_strong_signal
 def main():
-    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    deriv_api_key = os.getenv("DERIV_API_KEY")
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+    DERIV_API_KEY = os.getenv("DERIV_API_KEY")
 
     # Confirm startup
     send_telegram_message(
-        telegram_token,
-        telegram_chat_id,
+        TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID,
         "✅ Deriv Signal Bot started. Monitoring markets..."
     )
 
