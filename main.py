@@ -375,6 +375,40 @@ def signal_for_timeframe(candles):
 def analyze_and_notify():
     for symbol in ASSETS:
         results: Dict[int, Optional[str]] = {}
+
+        for tf in TIMEFRAMES:
+            candles = fetch_candles(symbol, tf, CANDLES_N)
+            if not candles:
+                results[tf] = None
+                continue
+
+            sig = signal_for_timeframe(candles)  # <-- now using ASPMI logic
+            results[tf] = sig
+
+        sig6, sig10 = results.get(360), results.get(600)
+
+        if sig6 and sig10 and sig6 == sig10:
+            # ✅ Strong signal (agreement)
+            send_strong_signal(symbol, sig6)
+
+        elif sig6 and not sig10:
+            # ✅ Only 6-min signal
+            send_single_timeframe_signal(symbol, 360, sig6)
+
+        elif sig10 and not sig6:
+            # ✅ Only 10-min signal
+            send_single_timeframe_signal(symbol, 600, sig10)
+
+        else:
+            # ❌ No valid signal (either conflict or None)
+            pass
+
+# ==========================
+# Orchestrate: per asset, both TFs, resolve conflicts, notify
+# ==========================
+def analyze_and_notify():
+    for symbol in ASSETS:
+        results: Dict[int, Optional[str]] = {}
         for tf in TIMEFRAMES:
             candles = fetch_candles(symbol, tf, CANDLES_N)
             if not candles:
