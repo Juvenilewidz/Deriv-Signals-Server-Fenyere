@@ -1,61 +1,57 @@
 # bot.py
-import json
-import urllib.parse
-import urllib.request
+import os
+import requests
 
-def send_single_timeframe_signal(symbol, interval, signal, tf, direction):
-    message = f"""
-📊 Signal Alert!
-Symbol: {symbol}
-Timeframe: {tf}
-Direction: {direction}
-Signal: {signal}
-"""
-    send_telegram_message(message)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-def _tg_post(token: str, method: str, payload: dict) -> None:
-    url = f"https://api.telegram.org/bot{token}/{method}"
-    data = urllib.parse.urlencode(payload).encode()
-    req = urllib.request.Request(url, data=data)
-    with urllib.request.urlopen(req, timeout=15) as _:
-        pass  # best-effort; ignore body
+def _tf_label(seconds: int) -> str:
+    return "6min" if seconds == 360 else "10min" if seconds == 600 else f"{seconds}s"
+
+def _sym_label(symbol: str) -> str:
+    mapping = {
+        "R_10": "Volatility 10",
+        "R_50": "Volatility 50",
+        "R_75": "Volatility 75",
+        "1HZ75V": "Volatility 75 (1s)",
+        "1HZ100V": "Volatility 100 (1s)",
+        "1HZ150V": "Volatility 150 (1s)",
+    }
+    return mapping.get(symbol, symbol)
 
 def send_telegram_message(token: str, chat_id: str, text: str) -> None:
-    _tg_post(token, "sendMessage", {"chat_id": chat_id, "text": text})
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        requests.post(url, data=payload, timeout=15)
+    except Exception:
+        # swallow to avoid crashing the run on Telegram hiccups
+        pass
 
-def send_single_timeframe_signal(token: str, chat_id: str, symbol: str, tf: int, direction: str):
-    def send_single_timeframe_signal(token: str, chat_id: str,
-                                 symbol: str, tf: int, direction: str,
-                                 reason: str = "") -> None:
-    tf_label = f"M{tf // 60}"
-    msg = f"📊 {symbol} | {tf_label}\nSignal: {direction}"
-    if reason:
-        msg += f"\nReason: {reason}"
-    send_telegram_message(token, chat_id, msg)
-    send_telegram_message(token, chat_id, msg)
+def send_single_timeframe_signal(symbol: str, timeframe: int, direction: str, reason: str) -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    sym = _sym_label(symbol)
+    tf  = _tf_label(timeframe)
+    text = (
+        f"📊 <b>{sym}</b>\n"
+        f"⏰ {tf}\n"
+        f"🎯 <b>{direction.title()}</b>\n"
+        f"🧠 Reason: {reason}"
+    )
+    send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, text)
 
-def send_strong_signal(token: str, chat_id: str, symbol: str, direction: str, reason: str = ""):
-    msg = f"💥 STRONG {direction.upper()} | {symbol}" + (f"\n{reason}" if reason else "")
-    send_telegram_message(token, chat_id, msg)
-
-# Backward-compat for earlier import typo
-send_strongs_signal = send_strong_signal
-#
-
-# ====== Reasoning ============
-def send_single_timeframe_signal(token: str, chat_id: str,
-                                 symbol: str, tf: int, direction: str,
-                                 reason: str = "") -> None:
-    tf_label = f"M{tf // 60}"
-    msg = f"📊 {symbol} | {tf_label}\nSignal: {direction}"
-    if reason:
-        msg += f"\nReason: {reason}"
-    send_telegram_message(token, chat_id, msg)
-
-def send_strong_signal(token: str, chat_id: str,
-                       symbol: str, direction: str,
-                       reason: str = "") -> None:
-    msg = f"💥 STRONG {direction.upper()} | {symbol}"
-    if reason:
-        msg += f"\nReason: {reason}"
-    send_telegram_message(token, chat_id, msg)
+def send_strong_signal(symbol: str, direction: str, reasons_by_tf: dict) -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    sym = _sym_label(symbol)
+    r6  = reasons_by_tf.get(360) or "-"
+    r10 = reasons_by_tf.get(600) or "-"
+    text = (
+        f"📊 <b>{sym}</b>\n"
+        f"⏰ 6min & 10min AGREE\n"
+        f"💪 <b>STRONG {direction.upper()}</b>\n"
+        f"🧠 6m: {r6}\n"
+        f"🧠 10m: {r10}"
+    )
+    send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, text)
