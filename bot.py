@@ -3,6 +3,16 @@ import json
 import urllib.parse
 import urllib.request
 
+def send_single_timeframe_signal(symbol, interval, signal, tf, direction):
+    message = f"""
+📊 Signal Alert!
+Symbol: {symbol}
+Timeframe: {tf}
+Direction: {direction}
+Signal: {signal}
+"""
+    send_telegram_message(message)
+
 def _tg_post(token: str, method: str, payload: dict) -> None:
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = urllib.parse.urlencode(payload).encode()
