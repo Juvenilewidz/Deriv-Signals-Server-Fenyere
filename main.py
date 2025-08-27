@@ -1,103 +1,288 @@
-
-import pandas as pd
 import os
-import requests
 import json
+import asyncio
+import websockets
+import pandas as pd
+import numpy as np
 import time
+import requests
+from datetime import datetime, timezone
 
-# 🔍 Debug: check if API key is loaded
-api_key = os.getenv("DERIV_API_KEY")
-if not api_key:
-    print("❌ No API key found!")
-else:
-    print("✅ API key loaded.")
+# ====== ENV ======
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
+DERIV_APP_ID       = os.getenv("DERIV_APP_ID", "1089")   # 1089 = public demo app id (ok for public data)
+DERIV_API_KEY      = os.getenv("DERIV_API_KEY", "")      # optional for public market data
 
-# Telegram Bot
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    print("❌ Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+    # Don't exit; still run for logs.
 
-# Assets
-ASSETS = [
-    "R_10",
-    "R_50",
-    "R_75",
-    "R_75_1s",
-    "R_100_1s",
-    "R_150_1s"
-]
+# ====== ASSETS & TIMEFRAMES ======
+# Your exact Deriv codes:
+ASSETS = {
+    "R_10": "Volatility 10",
+    "R_50": "Volatility 50",
+    "R_75": "Volatility 75",
+    "1HZ75V": "Volatility 75 (1s)",
+    "1HZ100V": "Volatility 100 (1s)",
+    "1HZ150V": "Volatility 150 (1s)",
+}
 
-# Timeframes in minutes
-TIMEFRAMES = [6, 10]
+TIMEFRAMES = {
+    "6m": 360,
+    "10m": 600,
+}
 
-# ==================== Candle Fetch ====================
-def get_candles(symbol, timeframe=10, count=50):
-    url = "https://api.deriv.com/api/v4/ohlc"  # ✅ correct endpoint
-    params = {
-        "symbol": symbol,
-        "granularity": timeframe * 60,  # seconds
-        "count": count
-    }
-    r = requests.get(url, params=params)
-    try:
-        print(f"DEBUG Response for {symbol}: {r.text[:200]}")  # first 200 chars
-        data = r.json()
-    except Exception as e:
-        print(f"❌ JSON error for {symbol}: {e}")
-        return None
+CANDLES_COUNT = 200  # enough history for MAs
 
-    if "candles" not in data:
-        print(f"⚠️ No candle data for {symbol}")
-        return None
-
-    df = pd.DataFrame(data["candles"])
-    df["close"] = df["close"].astype(float)
-    df["open"] = df["open"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    return df
-# ==================== Signal Logic ====================
-def generate_signal(df):
-    if df is None or len(df) < 20:
-        return None
-
-    # Moving Average
-    df["MA"] = df["close"].rolling(window=10).mean()
-
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    # Bullish rejection: candle closes above MA
-    if prev["close"] < prev["MA"] and last["close"] > last["MA"]:
-        return "Buy"
-
-    # Bearish rejection: candle closes below MA
-    if prev["close"] > prev["MA"] and last["close"] < last["MA"]:
-        return "Sell"
-
-    return None
-
-# ==================== Telegram ====================
-def send_telegram(message):
+# ====== UTIL: Telegram ======
+def send_telegram(text: str):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Telegram not configured; message would be:\n", text)
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
     try:
-        requests.post(url, data=payload)
+        r = requests.post(url, json=payload, timeout=15)
+        if r.status_code != 200:
+            print(f"⚠️ Telegram send failed: {r.status_code} {r.text}")
     except Exception as e:
-        print(f"❌ Telegram send failed: {e}")
+        print(f"⚠️ Telegram exception: {e}")
 
-# ==================== Main Bot ====================
-def run_bot():
-    for asset in ASSETS:
-        for tf in TIMEFRAMES:
-            df = get_candles(asset, tf)
-            signal = generate_signal(df)
+# ====== TECHNICALS ======
+def typical_price(df):
+    return (df["high"] + df["low"] + df["close"]) / 3.0
 
-            if signal:
-                msg = f"📊 {asset}\n⏰ {tf}min\n🎯 {signal}"
-                print(msg)
-                send_telegram(msg)
-            else:
-                print(f"… No signal for {asset} ({tf}min)")
+def sma(series, period):
+    return series.rolling(window=period, min_periods=period).mean()
+
+def smma(series, period):
+    # Smoothed MA (Wilder/TradingView's RMA-like)
+    values = series.values.astype(float)
+    out = np.full_like(values, np.nan, dtype=float)
+    if len(values) < period:
+        return pd.Series(out, index=series.index)
+
+    # seed as SMA of first 'period'
+    seed = np.nanmean(values[:period])
+    out[period-1] = seed
+    alpha = 1.0 / period
+    for i in range(period, len(values)):
+        out[i] = out[i-1] + alpha * (values[i] - out[i-1])
+    return pd.Series(out, index=series.index)
+
+def detect_doji(c):
+    rng = max(abs(c["high"] - c["low"]), 1e-12)
+    body = abs(c["close"] - c["open"])
+    return body <= 0.1 * rng  # body <=10% of range
+
+def detect_pin_bullish(c):
+    # bullish pin: long lower wick, close near/above mid, body small-mid
+    total = max(abs(c["high"] - c["low"]), 1e-12)
+    upper = c["high"] - max(c["open"], c["close"])
+    lower = min(c["open"], c["close"]) - c["low"]
+    body = abs(c["close"] - c["open"])
+    return (lower >= 0.5 * total) and (upper <= 0.2 * total) and (c["close"] >= c["open"]) and (body <= 0.5 * total)
+
+def detect_pin_bearish(c):
+    # bearish pin: long upper wick, close near/below mid, body small-mid
+    total = max(abs(c["high"] - c["low"]), 1e-12)
+    upper = c["high"] - max(c["open"], c["close"])
+    lower = min(c["open"], c["close"]) - c["low"]
+    body = abs(c["close"] - c["open"])
+    return (upper >= 0.5 * total) and (lower <= 0.2 * total) and (c["close"] <= c["open"]) and (body <= 0.5 * total)
+
+def candle_is_bullish(c): return c["close"] > c["open"]
+def candle_is_bearish(c): return c["close"] < c["open"]
+
+# ====== WebSocket OHLC pull ======
+async def ws_fetch_candles(symbol: str, granularity: int, count: int = CANDLES_COUNT):
+    url = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
+    msg = {
+        "ticks_history": symbol,
+        "style": "candles",
+        "granularity": granularity,
+        "count": count,
+        "end": "latest"
+    }
+    auth_msg = {"authorize": DERIV_API_KEY} if DERIV_API_KEY else None
+
+    try:
+        async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+            # Optional authorize (not required for public data)
+            if auth_msg:
+                await ws.send(json.dumps(auth_msg))
+                auth_reply = json.loads(await ws.recv())
+                if "error" in auth_reply:
+                    print(f"⚠️ Authorize error: {auth_reply['error']}")
+                else:
+                    print("✅ Authorized with Deriv (optional)")
+
+            await ws.send(json.dumps(msg))
+            raw = await ws.recv()
+            data = json.loads(raw)
+            if "error" in data:
+                print(f"❌ Deriv error for {symbol}: {data['error']}")
+                return None
+            if "candles" not in data:
+                print(f"⚠️ No 'candles' in reply for {symbol}: {str(data)[:200]}")
+                return None
+
+            candles = data["candles"]
+            if not candles:
+                print(f"⚠️ Empty candles for {symbol}")
+                return None
+
+            df = pd.DataFrame(candles)
+            # fields are strings; cast
+            for col in ("open", "high", "low", "close"):
+                df[col] = df[col].astype(float)
+            # epoch -> datetime if needed
+            return df
+
+    except Exception as e:
+        print(f"❌ WS exception for {symbol} {granularity}s: {e}")
+        return None
+
+# ====== Strategy on one timeframe ======
+def evaluate_signal_on_df(df: pd.DataFrame):
+    """
+    Returns: 'BUY' / 'SELL' / None
+    Uses last two closed candles: c[-2] = rejection, c[-1] = confirmation.
+    """
+    if df is None or len(df) < 50:
+        return None, {}
+
+    df = df.copy()
+    df["tp"] = typical_price(df)
+
+    # MA1: SMMA(9) on typical price
+    df["MA1"] = smma(df["tp"], 9)
+    # MA2: SMMA(19) on close
+    df["MA2"] = smma(df["close"], 19)
+    # MA3: SMA(25) on previous indicator's data (MA2)
+    df["MA3"] = sma(df["MA2"], 25)
+
+    if df[["MA1", "MA2", "MA3"]].tail(3).isna().any().any():
+        return None, {}
+
+    # Use last two CLOSED candles
+    c_rej = df.iloc[-2]  # rejection candle
+    c_conf = df.iloc[-1] # confirmation candle
+
+    # Trend filters
+    uptrend   = (c_rej["MA1"] >= c_rej["MA2"]) and (c_rej["MA2"] >= c_rej["MA3"])
+    downtrend = (c_rej["MA1"] <= c_rej["MA2"]) and (c_rej["MA2"] <= c_rej["MA3"])
+
+    # Which MA is being retested? nearest of MA1 or MA2 to rejection candle close
+    ma1_val = c_rej["MA1"]
+    ma2_val = c_rej["MA2"]
+    target_ma = "MA1" if abs(c_rej["close"] - ma1_val) <= abs(c_rej["close"] - ma2_val) else "MA2"
+    target_val_rej = c_rej[target_ma]
+    target_val_conf = c_conf[target_ma]
+
+    # Rejection candlestick types
+    is_doji   = detect_doji(c_rej)
+    is_pin_b  = detect_pin_bullish(c_rej)
+    is_pin_s  = detect_pin_bearish(c_rej)
+
+    reasons = {
+        "uptrend": uptrend,
+        "downtrend": downtrend,
+        "target_ma": target_ma,
+        "rej_is_doji": bool(is_doji),
+        "rej_is_pin_bullish": bool(is_pin_b),
+        "rej_is_pin_bearish": bool(is_pin_s)
+    }
+
+    # ===== BUY logic =====
+    buy_rejection = (
+        uptrend and
+        ((is_doji or is_pin_b)) and
+        # rejection candle closes ABOVE target MA (not below)
+        (c_rej["close"] >= target_val_rej) and
+        # confirmation: bullish candle that closes above same MA
+        candle_is_bullish(c_conf) and
+        (c_conf["close"] >= target_val_conf)
+    )
+    if buy_rejection:
+        return "BUY", reasons
+
+    # ===== SELL logic =====
+    sell_rejection = (
+        downtrend and
+        ((is_doji or is_pin_s)) and
+        # rejection candle closes BELOW target MA (not above)
+        (c_rej["close"] <= target_val_rej) and
+        # confirmation: bearish candle that closes below same MA
+        candle_is_bearish(c_conf) and
+        (c_conf["close"] <= target_val_conf)
+    )
+    if sell_rejection:
+        return "SELL", reasons
+
+    return None, reasons
+
+# ====== Orchestrate per asset ======
+async def analyze_asset(symbol: str, pretty_name: str):
+    results = {}  # {"6m": "BUY"/"SELL"/None, "10m": ...}
+    details = {}
+
+    for tf_label, gran in TIMEFRAMES.items():
+        df = await ws_fetch_candles(symbol, granularity=gran, count=CANDLES_COUNT)
+        if df is None:
+            results[tf_label] = None
+            continue
+        sig, info = evaluate_signal_on_df(df)
+        results[tf_label] = sig
+        details[tf_label] = info
+
+    # Single-direction resolution:
+    sig6 = results.get("6m")
+    sig10 = results.get("10m")
+
+    final_signal = None
+    display_tf = None
+    strength = ""
+
+    if sig6 and sig10:
+        if sig6 == sig10:
+            final_signal = sig10  # both agree; display 10m
+            display_tf = "10min"
+            strength = " (STRONG)"
+        else:
+            # conflict → no trade for this asset (respect your rule)
+            final_signal = None
+    elif sig10:
+        final_signal = sig10; display_tf = "10min"
+    elif sig6:
+        final_signal = sig6; display_tf = "6min"
+
+    if final_signal:
+        msg = f"📊 {pretty_name}\n⏰ {display_tf}\n🎯 {final_signal}{strength}"
+        send_telegram(msg)
+        print("SENT:", msg)
+    else:
+        print(f"{pretty_name}: No trade (no valid rejection or TF conflict).")
+
+# ====== MAIN ======
+async def main():
+    start = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    send_telegram(f"🤖 Deriv MA Rejection bot run started: {start}")
+
+    tasks = []
+    for sym, name in ASSETS.items():
+        tasks.append(analyze_asset(sym, name))
+    await asyncio.gather(*tasks)
+
+    end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    send_telegram(f"✅ Run completed: {end}")
 
 if __name__ == "__main__":
-    run_bot()
+    asyncio.run(main())
