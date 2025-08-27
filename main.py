@@ -305,18 +305,22 @@ def analyze_and_notify():
             # Either both None or conflict (BUY vs SELL) -> no alert
             pass
 
-if __name__ == "__main__":
-    # Run once (GitHub Actions cron will execute every 10 minutes).
-    # No startup spam here; only signals are sent.
-    analyze_and_notify()
-
 
 if __name__ == "__main__":
     try:
-        main()
+        # Run once to confirm bot is alive
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            send_telegram_message(
+                TELEGRAM_BOT_TOKEN,
+                TELEGRAM_CHAT_ID,
+                "✅ Bot started successfully and is now live!"
+            )
+
+        # Then do analysis
+        analyze_and_notify()
+
     except Exception as e:
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            # Best-effort crash notice so you know something went wrong
             send_telegram_message(
                 TELEGRAM_BOT_TOKEN,
                 TELEGRAM_CHAT_ID,
