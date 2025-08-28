@@ -405,7 +405,10 @@ def signal_for_timeframe(candles, tf):
         return ("MA1", ma1[i]) if d1 <= d2 else ("MA2", ma2[i])
 
     def pick_ma_for_sell(i):
-        
+        # rally towards MA: compare highs to MA1/MA2
+        d1 = abs(highs[i] - ma1[i])
+        d2 = abs(highs[i] - ma2[i])
+        return ("MA1", ma1[i]) if d1 <= d2 else ("MA2", ma2[i])
         # rally towards MA: compare highs to MA1/MA2
     #======================================================================================================
 def signal_for_timeframe(candles, tf):
