@@ -486,28 +486,43 @@ def signal_for_timeframe(candles, tf):
 # ==========================
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
+from typing import Dict, Tuple, Optional
+
 def analyze_and_notify():
     for symbol in ASSETS:
         results: Dict[int, Tuple[Optional[str], Optional[str]]] = {}
+
         for tf in TIMEFRAMES:
             candles = fetch_candles(symbol, tf, CANDLES_N)
             if not candles:
                 results[tf] = (None, None)
                 continue
-            direction, reason = signal_for_timeframe(candles, tf)
 
-if direction is None:
-    results[tf] = (None, None)
-    continue
+            out = signal_for_timeframe(candles, tf)
+
+            # If no setup on this TF
+            if not out:
+                results[tf] = (None, None)
+                continue
+
+            # Normalize output (supports dict {"signal","reasons"} OR (signal, reasons))
+            if isinstance(out, dict):
+                direction = out.get("signal")
+                reason = out.get("reasons")
+            else:
+                direction, reason = out  # type: ignore[misc]
+
             results[tf] = (direction, reason)
 
-        sig6, rsn6 = results.get(360, (None, None))
+        # Pull 6-min (360s) and 10-min (600s) results
+        sig6, rsn6  = results.get(360, (None, None))
         sig10, rsn10 = results.get(600, (None, None))
 
         # If both TFs agree → Strong
         if sig6 and sig10 and sig6 == sig10:
             reasons = {360: rsn6, 600: rsn10}
             send_strong_signal(symbol, sig6, reasons)
+
         # Single-timeframe signals (no conflict)
         elif sig6 and not sig10:
             send_single_timeframe_signal(symbol, 360, sig6, rsn6)
@@ -516,7 +531,6 @@ if direction is None:
         else:
             # either both None or conflict → do nothing
             pass
-
 
 if __name__ == "__main__":
     try:
