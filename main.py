@@ -315,7 +315,7 @@ def signal_for_timeframe(candles, tf):
     Returns None or {"signal": "BUY"/"SELL", "reasons": [...]}
     """
     if len(candles) < 60:
-    return None, None
+       return None, None
 
     opens  = np.array([c["open"]  for c in candles], dtype=float)
     highs  = np.array([c["high"]  for c in candles], dtype=float)
