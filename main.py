@@ -406,83 +406,87 @@ def signal_for_timeframe(candles, tf):
 
     def pick_ma_for_sell(i):
         # rally towards MA: compare highs to MA1/MA2
-        d1 = abs(highs[i] - ma1[i])
-        d2 = abs(highs[i] - ma2[i])
-        return ("MA1", ma1[i]) if d1 <= d2 else ("MA2", ma2[i])
+def signal_for_timeframe(candles, tf):
+    """
+    Detects trend, rejection, candlestick pattern, and confirmation for a given timeframe.
+    Returns (direction, reason_text).
+    """
 
-    rej = candle_bits(i_rej)
-    con = candle_bits(i_con)
+    # Ensure we have enough candles
+    if len(candles) < 5:
+        return None, None
+
+    # Extract OHLC
+    closes = [c['close'] for c in candles]
+    highs = [c['high'] for c in candles]
+    lows = [c['low'] for c in candles]
+
+    # Moving Average function
+    def sma(values, length):
+        if len(values) < length:
+            return None
+        return sum(values[-length:]) / length
+
+    # Calculate MAs (you can change the periods if needed)
+    MA1 = sma(closes, 9)    # Fast
+    MA2 = sma(closes, 21)   # Medium
+    MA3 = sma(closes, 25)   # Slow
+
+    if not MA1 or not MA2 or not MA3:
+        return None, None
 
     reasons = []
+    direction = None
 
-    # ================= BUY SIDE =================
-    if stack_up(i_rej):
-        reasons.append("Trend UP: MA1 > MA2 > MA3 (stacked).")
-        which, target = pick_ma_for_buy(i_rej)
+    # 1️⃣ Trend detection
+    if MA1 > MA2 > MA3:
+        trend = "Uptrend"
+        direction = "Buy"
+        reasons.append(f"Trend UP: MA1 > MA2 > MA3 (stacked).")
+    elif MA1 < MA2 < MA3:
+        trend = "Downtrend"
+        direction = "Sell"
+        reasons.append(f"Trend DOWN: MA1 < MA2 < MA3 (stacked).")
+    else:
+        return None, None  # no clear trend
 
-        # Pullback into MA zone (touch or near miss)
-        touched = (lows[i_rej] <= target <= highs[i_rej]) or near(lows[i_rej], target) or near(opens[i_rej], target) or near(closes[i_rej], target)
-        if touched:
-            reasons.append(f"Pullback to {which}: low/close near {which}.")
-        else:
-            reasons.append(f"No pullback to MA1/MA2 (missed by {abs(lows[i_rej]-target):.2f}).")
-            return None
+    # 2️⃣ Rejection logic (price near MA1 or MA2)
+    last_close = closes[-1]
+    last_low = lows[-1]
+    last_high = highs[-1]
 
-        # Rejection candle must CLOSE ABOVE the MA being tested
-        if closes[i_rej] >= target - tiny:
-            reasons.append(f"Rejection: close {closes[i_rej]:.2f} above {which} {target:.2f}.")
-        else:
-            return None
+    rejection_ma = None
+    if abs(last_low - MA1) / MA1 < 0.002 or abs(last_close - MA1) / MA1 < 0.002:
+        rejection_ma = "MA1"
+    elif abs(last_low - MA2) / MA2 < 0.002 or abs(last_close - MA2) / MA2 < 0.002:
+        rejection_ma = "MA2"
 
-        # Rejection type: doji / pin / engulf allowed
-        if rej["is_doji"] or rej["pin_low"] or rej["engulf_bull"]:
-            tag = "doji" if rej["is_doji"] else ("pin bar (long lower wick)" if rej["pin_low"] else "bullish engulfing")
-            reasons.append(f"Rejection candlestick type: {tag}.")
-        else:
-            return None
+    if rejection_ma:
+        reasons.append(f"Rejection at {rejection_ma}: price touched/closed near {rejection_ma}.")
 
-        # Confirmation: next candle bullish and closes above same MA
-        if con["is_bull"] and closes[i_con] >= target - tiny:
-            reasons.append(f"Confirmation: bullish close {closes[i_con]:.2f} above {which}.")
-            return {"signal": "BUY", "reasons": reasons}
-        else:
-            return None
+    # 3️⃣ Candlestick rejection pattern
+    body = abs(closes[-1] - opens[-1])
+    candle_range = highs[-1] - lows[-1]
+    upper_wick = highs[-1] - max(closes[-1], opens[-1])
+    lower_wick = min(closes[-1], opens[-1]) - lows[-1]
 
-    # ================= SELL SIDE =================
-    if stack_down(i_rej):
-        reasons.append("Trend DOWN: MA1 < MA2 < MA3 (stacked).")
-        which, target = pick_ma_for_sell(i_rej)
+    if candle_range > 0:
+        if body / candle_range < 0.3:  # doji-like
+            reasons.append("Rejection candlestick type: Doji.")
+        elif lower_wick > body * 2 and direction == "Buy":
+            reasons.append("Rejection candlestick type: Hammer.")
+        elif upper_wick > body * 2 and direction == "Sell":
+            reasons.append("Rejection candlestick type: Shooting Star.")
 
-        # Pullback into MA zone (touch or near miss)
-        touched = (lows[i_rej] <= target <= highs[i_rej]) or near(highs[i_rej], target) or near(opens[i_rej], target) or near(closes[i_rej], target)
-        if touched:
-            reasons.append(f"Pullback to {which}: high/close near {which}.")
-        else:
-            reasons.append(f"No pullback to MA1/MA2 (missed by {abs(highs[i_rej]-target):.2f}).")
-            return None
+    # 4️⃣ Confirmation candle
+    if direction == "Buy" and closes[-1] > MA1:
+        reasons.append(f"Confirmation: bullish close {closes[-1]:.2f} above MA1.")
+    elif direction == "Sell" and closes[-1] < MA1:
+        reasons.append(f"Confirmation: bearish close {closes[-1]:.2f} below MA1.")
+    else:
+        return None, None
 
-        # Rejection candle must CLOSE BELOW the MA being tested
-        if closes[i_rej] <= target + tiny:
-            reasons.append(f"Rejection: close {closes[i_rej]:.2f} below {which} {target:.2f}.")
-        else:
-            return None
-
-        # Rejection type: doji / inverted pin / engulf allowed
-        if rej["is_doji"] or rej["pin_high"] or rej["engulf_bear"]:
-            tag = "doji" if rej["is_doji"] else ("inverted pin bar (long upper wick)" if rej["pin_high"] else "bearish engulfing")
-            reasons.append(f"Rejection candlestick type: {tag}.")
-        else:
-            return None
-
-        # Confirmation: next candle bearish and closes below same MA
-        if con["is_bear"] and closes[i_con] <= target + tiny:
-            reasons.append(f"Confirmation: bearish close {closes[i_con]:.2f} below {which}.")
-            return {"signal": "SELL", "reasons": reasons}
-        else:
-            return None
-
-    # If neither stacked up nor down -> no signal
-    return None
+    return direction, reasons
 # ==========================
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
