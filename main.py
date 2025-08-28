@@ -495,6 +495,10 @@ def analyze_and_notify():
                 results[tf] = (None, None)
                 continue
             direction, reason = signal_for_timeframe(candles, tf)
+
+if direction is None:
+    results[tf] = (None, None)
+    continue
             results[tf] = (direction, reason)
 
         sig6, rsn6 = results.get(360, (None, None))
