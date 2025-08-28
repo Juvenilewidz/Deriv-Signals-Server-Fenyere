@@ -305,8 +305,7 @@ def choose_rejected_ma(ma1_val: float, ma2_val: float, candle: Dict) -> Tuple[st
         return ("MA1", ma1_val)
     return ("MA2", ma2_val)
     #===============================================================================================================================
-
-def signal_for_timeframe(candles):
+def signal_for_timeframe(candles, tf):
     """
     ASPMI signal logic using:
       MA1 = Smoothed(9) on Typical price (HLC/3)
