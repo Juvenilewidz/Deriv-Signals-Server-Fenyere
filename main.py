@@ -408,14 +408,14 @@ def signal_for_timeframe(candles, tf):
         
         # rally towards MA: compare highs to MA1/MA2
     #======================================================================================================
-def signal_for_timeframe(candles, tf):
+        def signal_for_timeframe(candles, tf):
     """
     Detects trend, rejection, candlestick pattern, and confirmation for a given timeframe.
     Returns (direction, reason_text).
     """
 
     # Ensure we have enough candles
-    if len(candles) < 5:
+    if len(candles) <= 5:
         return None, None
 
     # Extract OHLC
@@ -430,9 +430,9 @@ def signal_for_timeframe(candles, tf):
         return sum(values[-length:]) / length
 
     # Calculate MAs (you can change the periods if needed)
-    MA1 = sma(closes, 9)    # Fast
-    MA2 = sma(closes, 21)   # Medium
-    MA3 = sma(closes, 25)   # Slow
+    MA1 = sma(closes, 9)   # Fast
+    MA2 = sma(closes, 21)  # Medium
+    MA3 = sma(closes, 55)  # Slow
 
     if not MA1 or not MA2 or not MA3:
         return None, None
@@ -440,19 +440,19 @@ def signal_for_timeframe(candles, tf):
     reasons = []
     direction = None
 
-    # 1️⃣ Trend detection
-    if MA1 > MA2 > MA3:
-        trend = "Uptrend"
-        direction = "Buy"
+    # Trend detection
+    if MA1 > MA2 and MA2 > MA3:
+        trend = "uptrend"
+        direction = "buy"
         reasons.append(f"Trend UP: MA1 > MA2 > MA3 (stacked).")
-    elif MA1 < MA2 < MA3:
-        trend = "Downtrend"
-        direction = "Sell"
+    elif MA1 < MA2 and MA2 < MA3:
+        trend = "downtrend"
+        direction = "sell"
         reasons.append(f"Trend DOWN: MA1 < MA2 < MA3 (stacked).")
     else:
         return None, None  # no clear trend
 
-    # 2️⃣ Rejection logic (price near MA1 or MA2)
+    # Rejection logic (price near MA1 or MA2)
     last_close = closes[-1]
     last_low = lows[-1]
     last_high = highs[-1]
@@ -466,30 +466,9 @@ def signal_for_timeframe(candles, tf):
     if rejection_ma:
         reasons.append(f"Rejection at {rejection_ma}: price touched/closed near {rejection_ma}.")
 
-    # 3️⃣ Candlestick rejection pattern
-    body = abs(closes[-1] - opens[-1])
-    candle_range = highs[-1] - lows[-1]
-    upper_wick = highs[-1] - max(closes[-1], opens[-1])
-    lower_wick = min(closes[-1], opens[-1]) - lows[-1]
-
-    if candle_range > 0:
-        if body / candle_range < 0.3:  # doji-like
-            reasons.append("Rejection candlestick type: Doji.")
-        elif lower_wick > body * 2 and direction == "Buy":
-            reasons.append("Rejection candlestick type: Hammer.")
-        elif upper_wick > body * 2 and direction == "Sell":
-            reasons.append("Rejection candlestick type: Shooting Star.")
-
-    # 4️⃣ Confirmation candle
-    if direction == "Buy" and closes[-1] > MA1:
-        reasons.append(f"Confirmation: bullish close {closes[-1]:.2f} above MA1.")
-    elif direction == "Sell" and closes[-1] < MA1:
-        reasons.append(f"Confirmation: bearish close {closes[-1]:.2f} below MA1.")
-    else:
-        return None, None
-
     return direction, reasons
-# ==========================
+
+# ===========================================================================================================÷==
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
 from typing import Dict, Tuple, Optional
