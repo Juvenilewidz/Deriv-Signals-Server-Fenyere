@@ -408,7 +408,7 @@ def signal_for_timeframe(candles, tf):
         
         # rally towards MA: compare highs to MA1/MA2
     #======================================================================================================
-        def signal_for_timeframe(candles, tf):
+def signal_for_timeframe(candles, tf):
     """
     Detects trend, rejection, candlestick pattern, and confirmation for a given timeframe.
     Returns (direction, reason_text).
