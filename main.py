@@ -152,8 +152,131 @@ def confirmation_buy(candle, ma_val) -> bool:
 
 def confirmation_sell(candle, ma_val) -> bool:
     return is_bearish(candle["open"], candle["close"]) and (candle["close"] < ma_val)
-
+#================================================================================================================================================================# =======================================
+# Softer rules + reasons
 # ==========================
+
+REJ_WICK_RATIO = 1.2      # wick must be >= 1.2x body to count as a pin-style rejection
+DOJI_BODY_MAX = 0.2       # doji if body <= 20% of range
+NEAR_FRAC = 0.25          # how close to MA counts as “near” (fraction of recent ATR/range)
+WIGGLE_FRAC = 0.15        # let MAs be a bit out of perfect order (15% of recent range)
+
+def _bullish(c): return c["close"] > c["open"]
+def _bearish(c): return c["close"] < c["open"]
+
+def _body(c):   return abs(c["close"] - c["open"])
+def _range(c):  return c["high"] - c["low"]
+def _upper_wick(c): return c["high"] - max(c["open"], c["close"])
+def _lower_wick(c): return min(c["open"], c["close"]) - c["low"]
+
+def _avg_range(candles, n=10):
+    n = min(n, len(candles))
+    if n <= 1: return 0.0
+    return sum(_range(c) for c in candles[-n:]) / n
+
+def _near(price, ref, tol):  # absolute distance check
+    return abs(price - ref) <= tol
+
+def trend_up(ma1, ma2, ma3, i):
+    """Uptrend with wiggle-room: ma1 >= ma2 >= ma3 allowing small tolerance."""
+    if i == 0: return False
+    return (ma1[i] >= ma2[i] - WIGGLE and ma2[i] >= ma3[i] - WIGGLE)
+
+def trend_down(ma1, ma2, ma3, i):
+    """Downtrend with wiggle-room: ma1 <= ma2 <= ma3 allowing small tolerance."""
+    if i == 0: return False
+    return (ma1[i] <= ma2[i] + WIGGLE and ma2[i] <= ma3[i] + WIGGLE)
+
+def _closest_ma(ma1, ma2, i, price):
+    """Return ('MA1' or 'MA2', value) for the MA closer to price."""
+    d1 = abs(price - ma1[i])
+    d2 = abs(price - ma2[i])
+    return ("MA1", ma1[i]) if d1 <= d2 else ("MA2", ma2[i])
+
+def _is_doji(c):
+    r = _range(c)
+    return r > 0 and _body(c) <= DOJI_BODY_MAX * r
+
+def _rejection_candle(c, target_ma, side, tol):
+    """
+    True if c 'rejects' target_ma in the intended direction:
+    - BUY: candle probes below/near MA and **closes above** it
+    - SELL: candle probes above/near MA and **closes below** it
+    Accepts pin/hammer/doji-like bodies (long wick).
+    """
+    r = _range(c)
+    if r <= 0: return False, "range=0"
+
+    if side == "BUY":
+        if c["low"] <= target_ma + tol and c["close"] >= target_ma - tol:
+            # long lower wick OR doji near MA
+            lw = _lower_wick(c); uw = _upper_wick(c); b = _body(c)
+            if lw >= REJ_WICK_RATIO * b or _is_doji(c):
+                return True, "rejection: wick/close above MA"
+        return False, "no BUY-style rejection"
+
+    if side == "SELL":
+        if c["high"] >= target_ma - tol and c["close"] <= target_ma + tol:
+            uw = _upper_wick(c); lw = _lower_wick(c); b = _body(c)
+            if uw >= REJ_WICK_RATIO * b or _is_doji(c):
+                return True, "rejection: wick/close below MA"
+        return False, "no SELL-style rejection"
+
+    return False, "unknown side"
+
+def signal_for_timeframe(candles):
+    """
+    ASPMI (soft) strategy for ONE timeframe.
+    Returns (signal, reason) where signal is 'BUY'/'SELL'/None.
+    """
+    if len(candles) < 30:
+        return None, "not-enough-candles"
+
+    # --- series
+    closes  = [c["close"] for c in candles]
+    highs   = [c["high"]  for c in candles]
+    lows    = [c["low"]   for c in candles]
+    typical = [(h + l + c) / 3 for h, l, c in zip(highs, lows, closes)]
+
+    # --- MAs per spec
+    ma1 = smoothed_ma(typical, period=9)        # smoothed on typical
+    ma2 = smoothed_ma(closes,  period=19)       # smoothed on close
+    ma3 = simple_ma(ma2,       period=25)       # simple of previous indicator
+
+    i_con = -1   # confirmation candle (last closed)
+    i_rej = -2   # rejection candle (previous one)
+
+    # guard against Nones coming from MA warmup
+    if any(x is None for x in (ma1[i_rej], ma2[i_rej], ma3[i_rej], ma1[i_con], ma2[i_con], ma3[i_con])):
+        return None, "MA-warmup"
+
+    # dynamic tolerances
+    avgR = _avg_range(candles, n=10)
+    tol  = max(NEAR_FRAC * avgR, 1e-9)
+    global WIGGLE
+    WIGGLE = max(WIGGLE_FRAC * avgR, 1e-9)
+
+    # BUY side
+    if trend_up(ma1, ma2, ma3, i_rej):
+        which, target = _closest_ma(ma1, ma2, i_rej, candles[i_rej]["close"])
+        ok, why = _rejection_candle(candles[i_rej], target, "BUY", tol)
+        if ok and _bullish(candles[i_con]) and candles[i_con]["close"] >= target - tol:
+            reason = f"BUY: uptrend (MA1≥MA2≥MA3), {which} rejection ({why}), " \
+                     f"confirm candle bullish closing ≥ {which}."
+            return "BUY", reason
+
+    # SELL side
+    if trend_down(ma1, ma2, ma3, i_rej):
+        which, target = _closest_ma(ma1, ma2, i_rej, candles[i_rej]["close"])
+        ok, why = _rejection_candle(candles[i_rej], target, "SELL", tol)
+        if ok and _bearish(candles[i_con]) and candles[i_con]["close"] <= target + tol:
+            reason = f"SELL: downtrend (MA1≤MA2≤MA3), {which} rejection ({why}), " \
+                     f"confirm candle bearish closing ≤ {which}."
+            return "SELL", reason
+
+    return None, "no-valid-setup"
+    
+# ========================================================================================================================================================
 # Deriv data fetch (candles)
 # ==========================
 def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List[Dict]:
