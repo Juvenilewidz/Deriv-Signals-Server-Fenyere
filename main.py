@@ -412,7 +412,7 @@ def signal_for_timeframe(candles, tf):
         
     #=========================================================================================================
 def analyze_and_notify():
-    for symbol in SYMBOLS:
+    for symbol in ASSETS:
         for tf in TIMEFRAMES:
             candles = fetch_candles(symbol, tf, CANDLES_N)
             if not candles:
