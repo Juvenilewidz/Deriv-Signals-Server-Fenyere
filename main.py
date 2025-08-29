@@ -357,6 +357,7 @@ def signal_for_timeframe(candles, tf):
     # Need valid MA values at the last two bars
     if any(math.isnan(x) for x in (ma1[i_rej], ma2[i_rej], ma3[i_rej], ma1[i_con], ma2[i_con], ma3[i_con])):
         return None, "Invalid MA values"
+        return None, None
 
     # ---------- helpers ----------
     def atr14():
