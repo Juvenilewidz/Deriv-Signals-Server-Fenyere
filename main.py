@@ -225,9 +225,57 @@ def _rejection_candle(c, target_ma, side, tol):
         return False, "no SELL-style rejection"
 
     return False, "unknown side"
+    
     #========================================================================================================================
+# ---------- Softer Decision Logic ----------
+    reasons = []
 
+    i_rej = len(candles) - 2  # rejection
+    i_con = len(candles) - 1  # confirmation
 
+    rej = candle_bits(i_rej)
+    con = candle_bits(i_con)
+
+    # ATR band for "near" definition
+    atr = np.mean(highs[-14:] - lows[-14:])
+    band = max(0.25 * atr, 0.0005 * closes[-1])
+
+    # ---- BUY setups ----
+    if stack_up(i_rej) and stack_up(i_con):
+        ma_name, ma_val = pick_ma_for_buy(i_rej)
+
+        near_ma = abs(rej["low"] - ma_val) <= band  # allow "near miss"
+        wick_rej = rej["pin_low"] or rej["is_doji"] or rej["engulf_bull"]
+
+        if (near_ma or wick_rej) and rej["c"] >= ma_val * 0.995:  # allow tiny dip
+            if con["is_bull"] and con["c"] > ma_val * 0.995:
+                reasons.append("Trend UP (MA1>MA2>MA3)")
+                if near_ma:
+                    reasons.append(f"Pullback near {ma_name}")
+                if wick_rej:
+                    reasons.append("Rejection candlestick pattern detected")
+                reasons.append("Confirmed by bullish candle close")
+                return {"signal": "BUY", "reasons": reasons}
+
+    # ---- SELL setups ----
+    if stack_down(i_rej) and stack_down(i_con):
+        ma_name, ma_val = pick_ma_for_sell(i_rej)
+
+        near_ma = abs(rej["high"] - ma_val) <= band
+        wick_rej = rej["pin_high"] or rej["is_doji"] or rej["engulf_bear"]
+
+        if (near_ma or wick_rej) and rej["c"] <= ma_val * 1.005:
+            if con["is_bear"] and con["c"] < ma_val * 1.005:
+                reasons.append("Trend DOWN (MA1<MA2<MA3)")
+                if near_ma:
+                    reasons.append(f"Pullback near {ma_name}")
+                if wick_rej:
+                    reasons.append("Rejection candlestick pattern detected")
+                reasons.append("Confirmed by bearish candle close")
+                return {"signal": "SELL", "reasons": reasons}
+
+    # No valid setup
+    return None, None
     
 # ========================================================================================================================================================
 # Deriv data fetch (candles)
@@ -470,6 +518,48 @@ def signal_for_timeframe(candles, tf):
         reasons.append(f"Rejection at {rejection_ma}: price touched/closed near {rejection_ma}.")
 
     return direction, reasons
+
+    #======================================================================================================
+    # ---------- Decision logic ----------
+    reasons = []
+
+    # rejection candle = 2nd last
+    i_rej = len(candles) - 2
+    # confirmation candle = last
+    i_con = len(candles) - 1
+
+    # Check uptrend
+    if stack_up(i_rej) and stack_up(i_con):
+        ma_name, ma_val = pick_ma_for_buy(i_rej)
+        rej = candle_bits(i_rej)
+        con = candle_bits(i_con)
+
+        # Rejection must touch/near MA and close above it
+        if abs(rej["low"] - ma_val) <= band and rej["c"] >= ma_val:
+            if rej["pin_low"] or rej["is_doji"] or rej["engulf_bull"]:
+                if con["is_bull"] and con["c"] > ma_val:
+                    reasons.append("Trend UP (MA1>MA2>MA3)")
+                    reasons.append(f"Rejection at {ma_name} with {('Pin Bar' if rej['pin_low'] else 'Doji/Engulfing')}")
+                    reasons.append("Confirmed by bullish close above MA")
+                    return {"signal": "BUY", "reasons": reasons}
+
+    # Check downtrend
+    if stack_down(i_rej) and stack_down(i_con):
+        ma_name, ma_val = pick_ma_for_sell(i_rej)
+        rej = candle_bits(i_rej)
+        con = candle_bits(i_con)
+
+        # Rejection must touch/near MA and close below it
+        if abs(rej["high"] - ma_val) <= band and rej["c"] <= ma_val:
+            if rej["pin_high"] or rej["is_doji"] or rej["engulf_bear"]:
+                if con["is_bear"] and con["c"] < ma_val:
+                    reasons.append("Trend DOWN (MA1<MA2<MA3)")
+                    reasons.append(f"Rejection at {ma_name} with {('Pin Bar' if rej['pin_high'] else 'Doji/Engulfing')}")
+                    reasons.append("Confirmed by bearish close below MA")
+                    return {"signal": "SELL", "reasons": reasons}
+
+    # If no valid setup
+    return None, None
 
 # ===========================================================================================================÷==
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
