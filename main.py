@@ -410,15 +410,14 @@ def signal_for_timeframe(candles, tf):
         d2 = abs(highs[i] - ma2[i])
         return ("MA1", ma1[i]) if d1 <= d2 else ("MA2", ma2[i])
     #=========================================================================================================
-
-    def analyze_and_notify():
-    for symbol in SYMBOLS:
-        for tf in TIMEFRAMES:
-            candles = fetch_candles(symbol, tf, CANDLES_N)
-            if not candles:
+ def analyze_and_notify():
+     for symbol in SYMBOLS:
+         for tf in TIMEFRAMES:
+             candles = fetch_candles(symbol, tf, CANDLES_N)
+             if not candles:
                 continue
-            direction, reason = signal_for_timeframe(candles, tf)
-            if direction:
+             direction, reason = signal_for_timeframe(candles, tf)
+             if direction:
                 msg = f"{symbol} | TF {tf//60}m | {direction} | {reason}"
                 notify(msg)
     #================================
