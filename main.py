@@ -414,16 +414,41 @@ def signal_for_timeframe(candles, tf):
     #=========================================================================================================
 def analyze_and_notify():
     for symbol in ASSETS:
+        results = {}
+
         for tf in TIMEFRAMES:
             candles = fetch_candles(symbol, tf, CANDLES_N)
             if not candles:
+                results[tf] = (None, None)
                 continue
 
-            direction, reason = signal_for_timeframe(candles, tf)
-            if direction:
-                msg = f"{symbol} | TF {tf//60}m | {direction} | {reason}"
-                notify(msg)
+            res = signal_for_timeframe(candles, tf)
 
+            # Normalize any possible shape
+            if res is None:
+                direction, reasons = (None, None)
+            elif isinstance(res, dict):
+                direction, reasons = res.get("signal"), res.get("reasons")
+            else:
+                try:
+                    direction, reasons = res
+                except Exception:
+                    direction, reasons = (None, None)
+
+            results[tf] = (direction, reasons)
+
+        # Resolve per-TF outcomes (6m vs 10m)
+        sig6, rsn6   = results.get(360, (None, None))
+        sig10, rsn10 = results.get(600, (None, None))
+
+        if sig6 and sig10 and sig6 == sig10:
+            send_strong_signal(symbol, sig6, {360: rsn6, 600: rsn10})
+        elif sig6 and not sig10:
+            send_single_timeframe_signal(symbol, 360, sig6, rsn6)
+        elif sig10 and not sig6:
+            send_single_timeframe_signal(symbol, 600, sig10, rsn10)
+        else:
+            pass
     #================================
 
 
