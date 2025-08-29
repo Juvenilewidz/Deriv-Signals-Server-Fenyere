@@ -27,7 +27,7 @@ DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 # Assets & Timeframes (HARD-CODED)
 # ==========================
 ASSETS = ["R_10", "R_50", "R_75", "1HZ75V", "1HZ100V", "1HZ150V"]
-TIMEFRAMES = [360, 600]  # 6m, 10m
+TIMEFRAMES = [300, 600]  # 5m, 10m
 CANDLES_N = 120          # enough history for the MAs
 
 # ==========================
@@ -503,18 +503,18 @@ def analyze_and_notify():
             results[tf] = (direction, reason)
 
         # Pull 6-min (360s) and 10-min (600s) results
-        sig6, rsn6  = results.get(360, (None, None))
+        sig5, rsn5  = results.get(300, (None, None))
         sig10, rsn10 = results.get(600, (None, None))
 
         # If both TFs agree → Strong
-        if sig6 and sig10 and sig6 == sig10:
-            reasons = {360: rsn6, 600: rsn10}
-            send_strong_signal(symbol, sig6, reasons)
+        if sig5 and sig10 and sig5 == sig10:
+            reasons = {300: rsn5, 600: rsn10}
+            send_strong_signal(symbol, sig5, reasons)
 
         # Single-timeframe signals (no conflict)
-        elif sig6 and not sig10:
-            send_single_timeframe_signal(symbol, 360, sig6, rsn6)
-        elif sig10 and not sig6:
+        elif sig5 and not sig10:
+            send_single_timeframe_signal(symbol, 300, sig5, rsn5)
+        elif sig10 and not sig5:
             send_single_timeframe_signal(symbol, 600, sig10, rsn10)
         else:
             # either both None or conflict → do nothing
