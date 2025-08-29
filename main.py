@@ -102,11 +102,11 @@ def is_bearish_pin(o: float, h: float, l: float, c: float) -> bool:
     bdy = candle_body(o, c)
     return uw >= 0.6 * rng and uw >= 1.2 * bdy
 
-def is_bullish_engulf(prev: Dict, cur: Dict]) -> bool:
+def is_bullish_engulf(prev: Dict, cur: Dict) -> bool:
     return (prev["close"] < prev["open"]) and (cur["close"] > cur["open"]) and \
            (cur["open"] <= prev["close"]) and (cur["close"] >= prev["open"])
 
-def is_bearish_engulf(prev: Dict, cur: Dict]) -> bool:
+def is_bearish_engulf(prev: Dict, cur: Dict) -> bool:
     return (prev["close"] > prev["open"]) and (cur["close"] < cur["open"]) and \
            (cur["open"] >= prev["close"]) and (cur["close"] <= prev["open"])
 
