@@ -6,7 +6,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 def _tf_label(seconds: int) -> str:
-    return "6min" if seconds == 360 else "10min" if seconds == 600 else f"{seconds}s"
+    return "5min" if seconds == 300 else "10min" if seconds == 600 else f"{seconds}s"
 
 def _sym_label(symbol: str) -> str:
     mapping = {
@@ -45,13 +45,13 @@ def send_strong_signal(symbol: str, direction: str, reasons_by_tf: dict) -> None
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     sym = _sym_label(symbol)
-    r6  = reasons_by_tf.get(360) or "-"
+    r5  = reasons_by_tf.get(300) or "-"
     r10 = reasons_by_tf.get(600) or "-"
     text = (
         f"📊 <b>{sym}</b>\n"
-        f"⏰ 6min & 10min AGREE\n"
+        f"⏰ 5min & 10min AGREE\n"
         f"💪 <b>STRONG {direction.upper()}</b>\n"
-        f"🧠 6m: {r6}\n"
+        f"🧠 5m: {r5}\n"
         f"🧠 10m: {r10}"
     )
     send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, text)
