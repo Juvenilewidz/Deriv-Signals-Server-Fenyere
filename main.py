@@ -305,112 +305,150 @@ def choose_rejected_ma(ma1_val: float, ma2_val: float, candle: Dict) -> Tuple[st
         return ("MA1", ma1_val)
     return ("MA2", ma2_val)
     #===============================================================================================================================
-def signal_for_timeframe(candles, tf):
+def signal_for_timeframe(candles: List[Dict], tf: int) -> Tuple[Optional[str], Optional[str]]:
     """
-    ASPMI signal logic using:
-      MA1 = Smoothed(9) on Typical price (HLC/3)
-      MA2 = Smoothed(19) on Close
-      MA3 = Simple(25) on MA2  (previous indicator's data)
-    Detects: trend (stacking), pullback to MA1/MA2, rejection candle, confirmation candle.
-    Returns None or {"signal": "BUY"/"SELL", "reasons": [...]}
+    ASPMI: Detects trend (MA stack), pullback to MA1/MA2, rejection candle, confirmation candle.
+    MA1 = SMMA(9) on HLC/3
+    MA2 = SMMA(19) on Close
+    MA3 = SMA(25) on MA2 (previous indicator's data)
+    Returns (direction, reason_text) or (None, None)
     """
     if len(candles) < 60:
-       return None, None
+        return None, None
 
+    # ---- arrays ----
     opens  = np.array([c["open"]  for c in candles], dtype=float)
     highs  = np.array([c["high"]  for c in candles], dtype=float)
     lows   = np.array([c["low"]   for c in candles], dtype=float)
     closes = np.array([c["close"] for c in candles], dtype=float)
     typical = (highs + lows + closes) / 3.0
 
-    # ---------- MAs ----------
+    # ---- MAs (no pandas) ----
     def smoothed(values, period):
-        # Wilder-style smoothed MA (EMA-like), no pandas
-        vals = np.asarray(values, dtype=float)
-        res = [np.mean(vals[:period])]
-        for i in range(period, len(vals)):
-            res.append((res[-1] * (period - 1) + vals[i]) / period)
-        # pad front with NaNs for alignment
-        return np.concatenate([np.full(len(vals)-len(res), np.nan), np.array(res)])
+        v = np.asarray(values, dtype=float)
+        if len(v) < period:  # not enough data
+            return np.full_like(v, np.nan)
+        seed = np.mean(v[:period])
+        out = [np.nan]*(len(v)-period) + [seed]
+        prev = seed
+        for i in range(period, len(v)):
+            prev = (prev*(period-1) + v[i]) / period
+            out.append(prev)
+        return np.array(out[-len(v):], dtype=float)
 
     def sma_prev(values, period):
-        # SMA over 'previous indicator's data' (e.g., MA2). Needs contiguous data.
         v = np.asarray(values, dtype=float)
         out = np.full_like(v, np.nan)
         window = []
         for i in range(len(v)):
             window.append(v[i])
-            if len(window) > period: window.pop(0)
-            # only compute when the last 'period' values are all finite
-            last = window[-period:] if len(window) >= period else None
-            if last is not None and np.isfinite(last).all():
-                out[i] = float(np.mean(last))
+            if len(window) > period:
+                window.pop(0)
+            if len(window) == period and np.isfinite(window).all():
+                out[i] = float(np.mean(window))
         return out
 
-    ma1 = smoothed(typical, 9)     # HLC/3
-    ma2 = smoothed(closes, 19)     # close
-    ma3 = sma_prev(ma2, 25)        # previous indicator's data = MA2
+    ma1 = smoothed(typical, 9)   # HLC/3
+    ma2 = smoothed(closes, 19)   # close
+    ma3 = sma_prev(ma2, 25)      # previous indicator's data = MA2
 
-    i_rej = len(candles) - 2  # rejection candle index
-    i_con = len(candles) - 1  # confirmation candle index
+    i_rej = len(candles) - 2  # rejection candle
+    i_con = len(candles) - 1  # confirmation candle
 
-    # Need valid MA values at the last two bars
-    if any(math.isnan(x) for x in (ma1[i_rej], ma2[i_rej], ma3[i_rej], ma1[i_con], ma2[i_con], ma3[i_con])):
+    # Need valid values on the last two bars
+    needed = (ma1[i_rej], ma2[i_rej], ma3[i_rej], ma1[i_con], ma2[i_con], ma3[i_con])
+    if any([not np.isfinite(x) for x in needed]):
         return None, "Invalid MA values"
-        return None, None
 
-    # ---------- helpers ----------
+    # ---- helpers ----
     def atr14():
         rng = highs - lows
-        return float(np.mean(rng[-14:]))
+        n = min(14, len(rng))
+        return float(np.mean(rng[-n:])) if n > 0 else 0.0
 
-    atr = atr14()
-    # soft-touch band around an MA: allow near-miss
-    band = max(0.25 * atr, 0.0005 * closes[-1])   # ~25% ATR or 5 bps of price
-    tiny = max(0.05 * band, 1e-9)                 # tiny tolerance for above/below checks
+    atr  = atr14()
+    band = max(0.25 * atr, 0.0005 * closes[-1])  # soft 'near' band
+    tiny = max(0.05 * band, 1e-12)
 
-    def stack_up(i):
-        # Uptrend: MA1 above MA2 above MA3 (allow tiny tolerance)
+    def stacked_up(i):
         return (ma1[i] >= ma2[i] - tiny) and (ma2[i] >= ma3[i] - tiny)
 
-    def stack_down(i):
-        # Downtrend: MA1 below MA2 below MA3 (allow tiny tolerance)
+    def stacked_down(i):
         return (ma1[i] <= ma2[i] + tiny) and (ma2[i] <= ma3[i] + tiny)
 
-    def candle_bits(i):
-        o, h, l, c = opens[i], highs[i], lows[i], closes[i]
-        body = abs(c - o)
-        rng  = max(h - l, tiny)
-        upper = h - max(o, c)
-        lower = min(o, c) - l
-        is_bull = c > o
-        is_bear = o > c
-        is_doji = body <= 0.25 * rng
-        pin_low = (lower > body) and (lower > upper)           # bullish pin
-        pin_high = (upper > body) and (upper > lower)          # bearish pin
-        engulf_bull = (i > 0 and c > o and o <= closes[i-1] and c >= opens[i-1] and body >= 0.6 * rng)
-        engulf_bear = (i > 0 and o > c and c <= closes[i-1] and o >= opens[i-1] and body >= 0.6 * rng)
-        return dict(o=o,h=h,l=l,c=c,body=body,rng=rng,upper=upper,lower=lower,
-                    is_bull=is_bull,is_bear=is_bear,is_doji=is_doji,
-                    pin_low=pin_low,pin_high=pin_high,
-                    engulf_bull=engulf_bull,engulf_bear=engulf_bear)
+    def pattern_name(prev, cur, side: str) -> Optional[str]:
+        o,h,l,c = cur["open"],cur["high"],cur["low"],cur["close"]
+        if side == "BUY":
+            if is_bullish_engulf(prev, cur): return "Bullish Engulfing"
+            if is_bullish_pin(o,h,l,c):      return "Pin Bar"
+            if is_bearish_pin(o,h,l,c):      return "Inverted Pin Bar"
+            if is_doji(o,h,l,c):             return "Doji"
+        else:
+            if is_bearish_engulf(prev, cur): return "Bearish Engulfing"
+            if is_bearish_pin(o,h,l,c):      return "Pin Bar"
+            if is_bullish_pin(o,h,l,c):      return "Inverted Pin Bar"
+            if is_doji(o,h,l,c):             return "Doji"
+        return None
 
-    def near(val, target):
-        return abs(val - target) <= band
+    def near_price_to(value, target):
+        return abs(value - target) <= band
 
-    # pick which MA (1 or 2) is being retested (closer to the relevant extreme)
+    # which MA is being retested (MA1 vs MA2)
     def pick_ma_for_buy(i):
-        # dip towards MA: compare lows to MA1/MA2
-        d1 = abs(lows[i] - ma1[i])
-        d2 = abs(lows[i] - ma2[i])
+        d1 = abs(lows[i]  - ma1[i])
+        d2 = abs(lows[i]  - ma2[i])
         return ("MA1", ma1[i]) if d1 <= d2 else ("MA2", ma2[i])
 
     def pick_ma_for_sell(i):
-        # rally towards MA: compare highs to MA1/MA2
         d1 = abs(highs[i] - ma1[i])
         d2 = abs(highs[i] - ma2[i])
         return ("MA1", ma1[i]) if d1 <= d2 else ("MA2", ma2[i])
-        
+
+    # ---- BUY path ----
+    if stacked_up(i_rej):
+        ma_tag, ma_val = pick_ma_for_buy(i_rej)
+
+        # rejection candle must be near/touch MA and close above it
+        rej = candles[i_rej]
+        prev = candles[i_rej - 1] if i_rej - 1 >= 0 else rej
+        pat = pattern_name(prev, rej, "BUY")
+
+        if pat and (rej["low"] <= ma_val + band) and (rej["close"] >= ma_val - tiny):
+            # confirmation: bullish, closes above same MA
+            con = candles[i_con]
+            if (con["close"] > con["open"]) and (con["close"] > ma_val):
+                reason = (
+                    f"TF {tf//60}m | BUY\n"
+                    f"• Trend: MA1 ≥ MA2 ≥ MA3 (uptrend)\n"
+                    f"• Rejection: {ma_tag} touched/near & close above\n"
+                    f"• Pattern: {pat} on rejection candle\n"
+                    f"• Confirmation: bullish close above {ma_tag}"
+                )
+                return "BUY", reason
+
+    # ---- SELL path ----
+    if stacked_down(i_rej):
+        ma_tag, ma_val = pick_ma_for_sell(i_rej)
+
+        # rejection candle near/touch MA and close below it
+        rej = candles[i_rej]
+        prev = candles[i_rej - 1] if i_rej - 1 >= 0 else rej
+        pat = pattern_name(prev, rej, "SELL")
+
+        if pat and (rej["high"] >= ma_val - band) and (rej["close"] <= ma_val + tiny):
+            # confirmation: bearish, closes below same MA
+            con = candles[i_con]
+            if (con["close"] < con["open"]) and (con["close"] < ma_val):
+                reason = (
+                    f"TF {tf//60}m | SELL\n"
+                    f"• Trend: MA1 ≤ MA2 ≤ MA3 (downtrend)\n"
+                    f"• Rejection: {ma_tag} touched/near & close below\n"
+                    f"• Pattern: {pat} on rejection candle\n"
+                    f"• Confirmation: bearish close below {ma_tag}"
+                )
+                return "SELL", reason
+
+    return None, None
     #=========================================================================================================
 def analyze_and_notify():
     for symbol in ASSETS:
