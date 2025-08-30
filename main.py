@@ -197,108 +197,124 @@ def stacked_down(ma1, ma2, ma3, i, tol) -> bool:
     return (ma1[i] is not None and ma2[i] is not None and ma3[i] is not None
             and ma1[i] <= ma2[i] + tol and ma2[i] <= ma3[i] + tol)
 
-# ==========================
-# Unstrict signal logic
-# ==========================
-def signal_for_timeframe(candles: List[Dict], tf: int) -> Tuple[Optional[str], Optional[List[str]]]:
+     # ==========================
+           # Unstrict signal logic
+           # ==========================
+def signal_for_timeframe(candles, tf):
     """
-    Unstrict ASPMI logic:
-      - MA1 = SMMA(9) on HLC/3
-      - MA2 = SMMA(19) on Close
-      - MA3 = SMA(25) on MA2
-      - Trend: stacked with a small tolerance
-      - Pullback: touch OR near miss (ATR band)
-      - Rejection: any of (pin/doji/engulf) OR simply wick > 0.5*body with close on the right side of MA
-      - Confirmation: next candle closes in trend direction and beyond target MA
-    Returns (direction, reasons) or (None, None)
+    ASPMI signal logic with enhanced filters:
+    - Sideways/consolidation filter
+    - Exhaustion filter
+    - Momentum check
+    - Oversized candle filter
     """
+
     if len(candles) < 60:
-        return (None, None)
+        return None, None
 
-    ma1, ma2, ma3 = compute_mas(candles)
-    i_rej = len(candles) - 2  # rejection candle index
-    i_con = len(candles) - 1  # confirmation candle index
-
-    # Need valid MAs at last two bars
-    if any(x is None for x in (ma1[i_rej], ma2[i_rej], ma3[i_rej], ma1[i_con], ma2[i_con], ma3[i_con])):
-        return (None, None)
-
-    # arrays for convenience
-    o_rej, h_rej, l_rej, c_rej = (candles[i_rej][k] for k in ("open", "high", "low", "close"))
-    o_con, h_con, l_con, c_con = (candles[i_con][k] for k in ("open", "high", "low", "close"))
-
-    # ATR band (near-miss allowed)
+    opens  = np.array([c["open"]  for c in candles], dtype=float)
     highs  = np.array([c["high"]  for c in candles], dtype=float)
     lows   = np.array([c["low"]   for c in candles], dtype=float)
     closes = np.array([c["close"] for c in candles], dtype=float)
-    rng = highs - lows
-    atr14 = float(np.mean(rng[-14:])) if len(rng) >= 14 else float(np.mean(rng[-len(rng):]))
-    band = max(0.30 * atr14, 0.0005 * closes[-1])  # 30% ATR or 5 bps of price
-    tiny = max(0.05 * band, 1e-9)
+    typical = (highs + lows + closes) / 3.0
 
-    reasons: List[str] = []
+    # ---------- MAs ----------
+    def smoothed(values, period):
+        vals = np.asarray(values, dtype=float)
+        res = [np.mean(vals[:period])]
+        for i in range(period, len(vals)):
+            res.append((res[-1] * (period - 1) + vals[i]) / period)
+        return np.concatenate([np.full(len(vals)-len(res), np.nan), np.array(res)])
 
-    # Trend with small tolerance
-    up = stacked_up(ma1, ma2, ma3, i_rej, tiny)
-    dn = stacked_down(ma1, ma2, ma3, i_rej, tiny)
-    if not (up or dn):
-        return (None, None)
+    def sma_prev(values, period):
+        v = np.asarray(values, dtype=float)
+        out = np.full_like(v, np.nan)
+        window = []
+        for i in range(len(v)):
+            window.append(v[i])
+            if len(window) > period:
+                window.pop(0)
+            last = window[-period:] if len(window) >= period else None
+            if last is not None and np.isfinite(last).all():
+                out[i] = float(np.mean(last))
+        return out
 
-    if up:
-        reasons.append("Trend UP: MA1 ≥ MA2 ≥ MA3 (tolerant).")
-        # which MA is being retested (closer to the dip)
-        d1 = abs(l_rej - ma1[i_rej])
-        d2 = abs(l_rej - ma2[i_rej])
-        ma_label, target = ("MA1", ma1[i_rej]) if d1 <= d2 else ("MA2", ma2[i_rej])
+    ma1 = smoothed(typical, 9)     # HLC/3
+    ma2 = smoothed(closes, 19)     # close
+    ma3 = sma_prev(ma2, 25)        # SMA of MA2
 
-        # near/ touch check
-        near = (l_rej <= target + band) or (abs(c_rej - target) <= band)
-        if near:
-            reasons.append(f"Pullback near {ma_label} (±band).")
+    i_rej = len(candles) - 2
+    i_con = len(candles) - 1
 
-            # rejection: pattern or simple wick bias with close back above MA
-            patt = pattern_name_buy(candles[i_rej - 1], candles[i_rej]) if i_rej > 0 else None
-            lower_w = lower_wick(l_rej, o_rej, c_rej)
-            body = candle_body(o_rej, c_rej)
-            rej_ok = (patt is not None) or (lower_w > 0.5 * body and c_rej >= target - tiny)
+    if any(math.isnan(x) for x in (ma1[i_rej], ma2[i_rej], ma3[i_rej],
+                                    ma1[i_con], ma2[i_con], ma3[i_con])):
+        return None, "Invalid MA values"
 
-            if rej_ok:
-                if patt:
-                    reasons.append(f"Rejection pattern: {patt}.")
-                else:
-                    reasons.append("Rejection: long lower wick / close above MA.")
-                # confirmation candle
-                if (c_con > o_con) and (c_con >= max(target, ma1[i_con], ma2[i_con]) - tiny):
-                    reasons.append("Confirmation: next candle bullish, closing above MA.")
-                    return ("BUY", reasons)
+    # ---------- Filters ----------
+    def atr14():
+        rng = highs - lows
+        return float(np.mean(rng[-14:]))
 
-    if dn:
-        reasons.append("Trend DOWN: MA1 ≤ MA2 ≤ MA3 (tolerant).")
-        # which MA is being retested (closer to the rally)
-        d1 = abs(h_rej - ma1[i_rej])
-        d2 = abs(h_rej - ma2[i_rej])
-        ma_label, target = ("MA1", ma1[i_rej]) if d1 <= d2 else ("MA2", ma2[i_rej])
+    atr = atr14()
+    tiny = max(0.05 * atr, 1e-9)
 
-        near = (h_rej >= target - band) or (abs(c_rej - target) <= band)
-        if near:
-            reasons.append(f"Pullback near {ma_label} (±band).")
+    def is_doji(i):
+        body = abs(closes[i] - opens[i])
+        rng = max(highs[i] - lows[i], 1e-9)
+        return body <= 0.2 * rng
 
-            patt = pattern_name_sell(candles[i_rej - 1], candles[i_rej]) if i_rej > 0 else None
-            upper_w = upper_wick(h_rej, o_rej, c_rej)
-            body = candle_body(o_rej, c_rej)
-            rej_ok = (patt is not None) or (upper_w > 0.5 * body and c_rej <= target + tiny)
+    def wick_dominates(i, side):
+        body = abs(closes[i] - opens[i])
+        rng = max(highs[i] - lows[i], 1e-9)
+        upper = highs[i] - max(opens[i], closes[i])
+        lower = min(opens[i], closes[i]) - lows[i]
+        if side == "BUY":
+            return lower >= 1.5 * body and lower >= 0.6 * rng
+        else:
+            return upper >= 1.5 * body and upper >= 0.6 * rng
 
-            if rej_ok:
-                if patt:
-                    reasons.append(f"Rejection pattern: {patt}.")
-                else:
-                    reasons.append("Rejection: long upper wick / close below MA.")
-                if (c_con < o_con) and (c_con <= min(target, ma1[i_con], ma2[i_con]) + tiny):
-                    reasons.append("Confirmation: next candle bearish, closing below MA.")
-                    return ("SELL", reasons)
+    def stack_up(i):   return (ma1[i] >= ma2[i] - tiny) and (ma2[i] >= ma3[i] - tiny)
+    def stack_down(i): return (ma1[i] <= ma2[i] + tiny) and (ma2[i] <= ma3[i] + tiny)
 
-    return (None, None)
+    def candle_bits(i):
+        o,h,l,c = opens[i], highs[i], lows[i], closes[i]
+        body = abs(c - o)
+        rng  = max(h - l, tiny)
+        return dict(o=o,h=h,l=l,c=c,body=body,rng=rng)
 
+    rej = candle_bits(i_rej)
+    con = candle_bits(i_con)
+
+    # ===== FILTERS =====
+    if abs(ma1[i_rej] - ma2[i_rej]) < 0.15 * atr:   # consolidation
+        return None, "Sideways market"
+
+    if abs(closes[i_rej] - ma3[i_rej]) > 3 * atr:   # exhaustion
+        return None, "Exhaustion move"
+
+    if rej["rng"] > 2.5 * atr or con["rng"] > 2.5 * atr:   # oversized candle
+        return None, "Oversized candle"
+
+    if con["rng"] < 0.8 * atr:   # weak momentum
+        return None, "Weak momentum"
+
+    # ========== BUY SETUP ==========
+    if stack_up(i_rej):
+        ma_tag, ma_val = ("MA1", ma1[i_rej]) if abs(lows[i_rej] - ma1[i_rej]) <= abs(lows[i_rej] - ma2[i_rej]) else ("MA2", ma2[i_rej])
+        if lows[i_rej] <= ma_val + tiny and closes[i_rej] >= ma_val - tiny:
+            if wick_dominates(i_rej, "BUY"):
+                if not is_doji(i_con) and closes[i_con] > opens[i_con] and closes[i_con] > ma_val:
+                    return "BUY", f"Trend Up | Rejected {ma_tag} | Momentum OK"
+
+    # ========== SELL SETUP ==========
+    if stack_down(i_rej):
+        ma_tag, ma_val = ("MA1", ma1[i_rej]) if abs(highs[i_rej] - ma1[i_rej]) <= abs(highs[i_rej] - ma2[i_rej]) else ("MA2", ma2[i_rej])
+        if highs[i_rej] >= ma_val - tiny and closes[i_rej] <= ma_val + tiny:
+            if wick_dominates(i_rej, "SELL"):
+                if not is_doji(i_con) and closes[i_con] < opens[i_con] and closes[i_con] < ma_val:
+                    return "SELL", f"Trend Down | Rejected {ma_tag} | Momentum OK"
+
+    return None, None
 # ==========================
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
