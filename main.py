@@ -22,7 +22,7 @@ if not DERIV_API_KEY:
 
 DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 
-# ==========================
+# =========================================
 # Assets & Timeframes (HARD-CODED)
 # ==========================
 ASSETS = ["R_10", "R_50", "R_75", "1HZ75V", "1HZ100V", "1HZ150V"]
