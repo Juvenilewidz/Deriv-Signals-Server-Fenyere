@@ -309,7 +309,7 @@ def signal_for_timeframe(candles, tf):
 
     if signal:
         return signal, reasons
-    return None
+    return None, []
 # ==========================
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
