@@ -200,121 +200,99 @@ def stacked_down(ma1, ma2, ma3, i, tol) -> bool:
      # =========================
            # Unstrict signal logic
            # ==========================
-def signal_for_timeframe(candles, tf_label):
-    """
-    Uses:
-      MA1 = SMMA(9) on HLC/3
-      MA2 = SMMA(19) on Close
-      MA3 = SMA(25) over MA2 (previous indicator's data)
+def signal_for_timeframe(candles, tf):
+    if len(candles) < 60:
+        return None, None
 
-    Rules:
-      1) Pinbar/Doji (even tiny) => valid high-priority context.
-      2) Reject oversized spikes: range > 2.2 * ATR(14).
-      3) Require stable momentum: |ΔMA1| <= 0.8 * ATR(14).
-      4) Reject exhaustion: |close - MA1| > 3 * ATR(14).
-      5) Fire immediately when all checks align with trend + pullback near MA1/MA2.
-    """
+    opens  = np.array([c["open"] for c in candles], dtype=float)
+    highs  = np.array([c["high"] for c in candles], dtype=float)
+    lows   = np.array([c["low"] for c in candles], dtype=float)
+    closes = np.array([c["close"] for c in candles], dtype=float)
+    typical = (highs + lows + closes) / 3.0
+
+    # MAs (keep your parameters as before: 9, 19, 25)
+    def smoothed(values, period):
+        vals = np.asarray(values, dtype=float)
+        res = [np.mean(vals[:period])]
+        for i in range(period, len(vals)):
+            res.append((res[-1] * (period - 1) + vals[i]) / period)
+        return np.concatenate([np.full(len(vals)-len(res), np.nan), np.array(res)])
+
+    def sma_prev(values, period):
+        v = np.asarray(values, dtype=float)
+        out = np.full_like(v, np.nan)
+        window = []
+        for i in range(len(v)):
+            window.append(v[i])
+            if len(window) > period:
+                window.pop(0)
+            last = window[-period:] if len(window) >= period else None
+            if last is not None and np.isfinite(last).all():
+                out[i] = float(np.mean(last))
+        return out
+
+    ma1 = smoothed(typical, 9)
+    ma2 = smoothed(closes, 19)
+    ma3 = sma_prev(ma2, 25)
+
+    i_rej = len(candles) - 2
+    i_con = len(candles) - 1
+
+    if any(math.isnan(x) for x in (ma1[i_rej], ma2[i_rej], ma3[i_rej], ma1[i_con], ma2[i_con], ma3[i_con])):
+        return None, None
+
+    # ATR for momentum / filters
+    rng = highs - lows
+    atr = float(np.mean(rng[-14:]))
+
+    def candle_bits(i):
+        o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+        body = abs(c - o)
+        rng  = max(h - l, 1e-9)
+        upper = h - max(o, c)
+        lower = min(o, c) - l
+        return dict(o=o,h=h,l=l,c=c,body=body,rng=rng,
+                    upper=upper,lower=lower,
+                    is_bull=(c > o), is_bear=(o > c),
+                    is_doji=(body <= 0.25 * rng),
+                    pin_low=(lower >= body and lower > upper),
+                    pin_high=(upper >= body and upper > lower))
+
+    rej = candle_bits(i_rej)
+    con = candle_bits(i_con)
+
+    # --- Filters ---
+    # Oversized candle rejection
+    if rej["body"] > 2*atr or rej["rng"] > 2*atr:
+        return None, "Oversized rejection candle"
+    if con["body"] > 2*atr or con["rng"] > 2*atr:
+        return None, "Oversized confirmation candle"
+
+    # Momentum check (stable ATR)
+    if atr > 0.015 * closes[-1]:  # ~1.5% of price
+        return None, "Momentum too volatile"
+
+    # Pick nearest MA
+    d1 = abs(rej["c"] - ma1[i_rej])
+    d2 = abs(rej["c"] - ma2[i_rej])
+    nearest_ma = ma1[i_rej] if d1 <= d2 else ma2[i_rej]
+
+    # Exhaustion filter (reject if stretched >1.5 ATR away)
+    if abs(rej["c"] - nearest_ma) > 1.5*atr:
+        return None, "Exhaustion: too far from MA"
+
+    # --- Signal logic ---
     reasons = []
-    n = len(candles)
-    if n < 30:
-        return None, []
+    if rej["is_doji"] or rej["pin_low"]:
+        if con["is_bull"] and con["c"] > nearest_ma:
+            reasons.append("Valid Pin/Doji rejection with bullish confirmation")
+            return "BUY", reasons
+    if rej["is_doji"] or rej["pin_high"]:
+        if con["is_bear"] and con["c"] < nearest_ma:
+            reasons.append("Valid Pin/Doji rejection with bearish confirmation")
+            return "SELL", reasons
 
-    # ----- Series -----
-    closes = [c["close"] for c in candles]
-    highs  = [c["high"]  for c in candles]
-    lows   = [c["low"]   for c in candles]
-    hlc3   = [(h + l + c) / 3.0 for h, l, c in zip(highs, lows, closes)]
-
-    # ----- MAs (your parameters) -----
-    ma1_list = smma(hlc3, 9)            # SMMA(9) on HLC/3
-    ma2_list = smma(closes, 19)         # SMMA(19) on Close
-    # SMA(25) over MA2, aligned with MA2
-    ma2_vals = [x for x in ma2_list if x is not None]
-    ma3_raw  = sma(ma2_vals, 25) if len(ma2_vals) >= 25 else [None] * len(ma2_vals)
-    ma3_list = []
-    j = 0
-    for i in range(len(ma2_list)):
-        if ma2_list[i] is None:
-            ma3_list.append(None)
-        else:
-            ma3_list.append(ma3_raw[j] if j < len(ma3_raw) else None)
-            j += 1
-
-    i_last = n - 1
-    i_prev = n - 2
-    ma1 = ma1_list[i_last]; ma2 = ma2_list[i_last]; ma3 = ma3_list[i_last]
-    ma1p = ma1_list[i_prev] if i_prev >= 0 else None
-
-    if any(v is None for v in (ma1, ma2, ma3, ma1p)):
-        return None, []
-
-    last = candles[i_last]
-    prev = candles[i_prev]
-
-    rng  = max(last["high"] - last["low"], 1e-12)
-    body = abs(last["close"] - last["open"])
-    uw   = last["high"] - max(last["open"], last["close"])
-    lw   = min(last["open"], last["close"]) - last["low"]
-
-    # ----- ATR(14) -----
-    atr_len = 14
-    if n < atr_len + 1:
-        return None, []
-    trs = []
-    for k in range(n - atr_len, n):
-        h = candles[k]["high"]
-        l = candles[k]["low"]
-        pc = candles[k - 1]["close"]
-        tr = max(h - l, abs(h - pc), abs(l - pc))
-        trs.append(tr)
-    atr = sum(trs) / atr_len
-
-    # ----- RULES -----
-    # 1) Pinbar / Doji (even tiny) => high-priority note (doesn't force direction alone)
-    is_doji   = body <= 0.15 * rng
-    bull_pin  = lw >= 2.0 * body
-    bear_pin  = uw >= 2.0 * body
-    if is_doji or bull_pin or bear_pin:
-        reasons.append("Rejection: Pin/Doji (tiny allowed)")
-
-    # 2) Avoid oversized candles (fake spikes)
-    if rng > 2.2 * atr:
-        return None, []
-
-    # 3) Momentum must be stable (MA1 slope not too steep vs ATR)
-    if abs(ma1 - ma1p) > 0.8 * atr:
-        return None, []
-
-    # 4) Exhaustion: price too far from MA1
-    if abs(last["close"] - ma1) > 3.0 * atr:
-        return None, []
-
-    # Pullback band (allow near-miss to MA1/MA2)
-    band = 0.35 * atr
-
-    # Trend stacking
-    up_trend   = (ma1 >= ma2 >= ma3)
-    down_trend = (ma1 <= ma2 <= ma3)
-
-    # Near MA1/MA2 checks
-    near_ma1 = (min(last["high"], ma1 + band) >= max(last["low"], ma1 - band))
-    near_ma2 = (min(last["high"], ma2 + band) >= max(last["low"], ma2 - band))
-    near_any = near_ma1 or near_ma2
-    if near_ma1:
-        reasons.append("Pullback near MA1 (±band)")
-    elif near_ma2:
-        reasons.append("Pullback near MA2 (±band)")
-
-    # Direction & confirmation on the same (last) candle
-    direction = None
-    if up_trend and near_any and last["close"] >= ma1:
-        direction = "BUY"
-        reasons.append("Trend UP: MA1 ≥ MA2 ≥ MA3; bullish close ≥ MA1")
-    elif down_trend and near_any and last["close"] <= ma1:
-        direction = "SELL"
-        reasons.append("Trend DOWN: MA1 ≤ MA2 ≤ MA3; bearish close ≤ MA1")
-
-    return (direction, reasons) if direction else (None, [])
+    return None, None
 # ==========================
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
 # ==========================
