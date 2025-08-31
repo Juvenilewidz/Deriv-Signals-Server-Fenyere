@@ -499,12 +499,13 @@ def analyze_and_notify():
 if __name__ == "__main__":
     try:
         # ONE startup alert when the script process launches
-        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            send_telegram_message(
-                TELEGRAM_BOT_TOKEN,
-                TELEGRAM_CHAT_ID,
-                "✅ Bot started successfully and is now live!"
-            )
+        # (commented out to stop repeated "bot is live" messages every 10 min)
+        # if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        #     send_telegram_message(
+        #         TELEGRAM_BOT_TOKEN,
+        #         TELEGRAM_CHAT_ID,
+        #         "✅ Bot started successfully and is now live!"
+        #     )
 
         analyze_and_notify()
 
