@@ -130,6 +130,9 @@ def pattern_name_sell(prev, cur) -> Optional[str]:
 # Deriv data fetch (candles)
 # ==========================
 def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List[Dict]:
+    """
+    Fetch the latest candles INCLUDING the live (still-forming) candle.
+    """
     ws = websocket.create_connection(DERIV_WS_URL, timeout=12)
     try:
         ws.send(json.dumps({"authorize": DERIV_API_KEY}))
@@ -141,12 +144,14 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
             "granularity": granularity,
             "count": count,
             "end": "latest",
-            "adjust_start_time": 1
+            "subscribe": 1  # <-- this makes sure we get live forming candle
         }
         ws.send(json.dumps(req))
+
         resp = json.loads(ws.recv())
         if "candles" not in resp:
             return []
+
         out = []
         for c in resp["candles"]:
             out.append({
@@ -156,13 +161,28 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
                 "low":   float(c["low"]),
                 "close": float(c["close"]),
             })
+
+        # also try to grab one tick update for the live candle
+        try:
+            update = json.loads(ws.recv())
+            if "candles" in update and update["candles"]:
+                live_c = update["candles"][-1]
+                out[-1] = {  # replace last candle with latest forming one
+                    "epoch": int(live_c["epoch"]),
+                    "open":  float(live_c["open"]),
+                    "high":  float(live_c["high"]),
+                    "low":   float(live_c["low"]),
+                    "close": float(live_c["close"]),
+                }
+        except:
+            pass
+
         return out
     finally:
         try:
             ws.close()
         except:
             pass
-
 # ==========================
 # MAs & trend
 # ==========================
