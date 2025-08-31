@@ -216,13 +216,13 @@ def signal_for_timeframe(candles, tf):
         return None, "insufficient history"
 
     # === params / tolerances ===
-    REJ_WICK_RATIO = 1.0      # treat even small pinbars as valid (1.0 = equal wick >= body)
-    OVERSIZED_MULT  = 2.0     # reject candles with body or range > OVERSIZED_MULT * ATR
+    REJ_WICK_RATIO = 0.3      # treat even small pinbars as valid (1.0 = equal wick >= body)
+    OVERSIZED_MULT  = 1.5     # reject candles with body or range > OVERSIZED_MULT * ATR
     MOMENTUM_ATR_FRAC = 0.015 # ATR must be <= 1.5% of price roughly (avoid high vol)
-    EXHAUSTION_ATR_MULT = 1.5 # price must be within this ATR distance to rejected MA
-    WIGGLE_FRAC = 0.15        # allow MAs slight unsorted wiggle as fraction of ATR
-    CONSISTENT_DIR_PCT = 0.6  # last N bars must have >=60% same direction to be clear-moving
-    CONSISTENT_BARS = 10
+    EXHAUSTION_ATR_MULT = 1.8 # price must be within this ATR distance to rejected MA
+    WIGGLE_FRAC = 0.25        # allow MAs slight unsorted wiggle as fraction of ATR
+    CONSISTENT_DIR_PCT = 0.5  # last N bars must have >=60% same direction to be clear-moving
+    CONSISTENT_BARS = 8
 
     # === OHLC arrays ===
     opens  = np.array([c["open"]  for c in candles], dtype=float)
