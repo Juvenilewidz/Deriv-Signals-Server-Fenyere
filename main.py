@@ -504,11 +504,18 @@ def analyze_and_notify():
         for tf in TIMEFRAMES:
             candles = fetch_candles(symbol, tf, CANDLES_N)
             if not candles:
-                results[tf] = (None, None)
-                continue
+    results[tf] = (None, None)
+    continue
 
-            direction, reasons = signal_for_timeframe(candles, tf, i_rej, i_con)
-            results[tf] = (direction, reasons)
+# define indices before calling signal_for_timeframe
+if len(candles) >= 2:  
+    i_rej = len(candles) - 2   # 2nd last candle = rejection
+    i_con = len(candles) - 1   # last candle = confirmation
+else:
+    i_rej = i_con = None   # fallback in case not enough candles
+
+direction, reasons = signal_for_timeframe(candles, tf, i_rej, i_con)
+results[tf] = (direction, reasons)
 
         # Pull 5-min (300s) and 10-min (600s) results
         sig5, rsn5   = results.get(300, (None, None))
