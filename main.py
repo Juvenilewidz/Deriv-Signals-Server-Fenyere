@@ -135,16 +135,18 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
     """
     ws = websocket.create_connection(DERIV_WS_URL, timeout=12)
     try:
+        # authorize
         ws.send(json.dumps({"authorize": DERIV_API_KEY}))
         _ = json.loads(ws.recv())
 
+        # request candles
         req = {
             "ticks_history": symbol,
             "style": "candles",
             "granularity": granularity,
             "count": count,
             "end": "latest",
-            "subscribe": 1  # <-- this makes sure we get live forming candle
+            "subscribe": 1  # ensures live forming candle
         }
         ws.send(json.dumps(req))
 
@@ -156,44 +158,43 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
         for c in resp["candles"]:
             out.append({
                 "epoch": int(c["epoch"]),
-                "open":  float(c["open"]),
-                "high":  float(c["high"]),
-                "low":   float(c["low"]),
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
                 "close": float(c["close"]),
             })
 
-        # also try to grab one tick update for the live candle
-                         # also try to grab one tick update for the live candle
-    try:
-        update = json.loads(ws.recv())
-        if "candles" in update and update["candles"]:
-            live_c = update["candles"][-1]
-            out[-1] = {  # replace last candle with latest forming one
-                "epoch": int(live_c["epoch"]),
-                "open": float(live_c["open"]),
-                "high": float(live_c["high"]),
-                "low": float(live_c["low"]),
-                "close": float(live_c["close"]),
-            }
+        # try to grab one tick update for the live candle
+        try:
+            update = json.loads(ws.recv())
+            if "candles" in update and update["candles"]:
+                live_c = update["candles"][-1]
+                out[-1] = {  # replace last candle with latest forming one
+                    "epoch": int(live_c["epoch"]),
+                    "open": float(live_c["open"]),
+                    "high": float(live_c["high"]),
+                    "low": float(live_c["low"]),
+                    "close": float(live_c["close"]),
+                }
 
-        # after appending new candle
-        if len(out) >= 2:
-            i_rej = len(out) - 2
-            i_con = len(out) - 1
-            direction, reason = signal_for_timeframe(out, granularity, i_rej, i_con)
-            if direction:
-                send_single_timeframe_signal(symbol, granularity, direction, reason)
+            # after appending new candle
+            if len(out) >= 2:
+                i_rej = len(out) - 2
+                i_con = len(out) - 1
+                direction, reason = signal_for_timeframe(out, granularity, i_rej, i_con)
+                if direction:
+                    send_single_timeframe_signal(symbol, granularity, direction, reason)
 
-    except:
-        pass
+        except Exception:
+            pass
+
+        return out
 
     finally:
         try:
             ws.close()
         except:
             pass
-
-    return out
         
 # ==========================
 # MAs & trend
