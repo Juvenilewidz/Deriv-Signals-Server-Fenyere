@@ -174,15 +174,16 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
                     "low":   float(live_c["low"]),
                     "close": float(live_c["close"]),
                 }
-        except:
-            pass
 
-        return out
-    finally:
-        try:
-            ws.close()
+                # after appending new candle
+                if len(out) >= 2:
+                   i_rej = len(out) - 2
+                   i_con = len(out) - 1
+                   direction, reason = signal_for_timeframe(out, granularity, i_rej, i_con)
+                   if direction:
+                      send_single_timeframe_signal(symbol, granularity, direction, reason)
         except:
-            pass
+           pass
 # ==========================
 # MAs & trend
 # ==========================
@@ -220,7 +221,7 @@ def stacked_down(ma1, ma2, ma3, i, tol) -> bool:
      # =========================
            # Unstrict signal logic
            # ==========================
-def signal_for_timeframe(candles, tf):
+def signal_for_timeframe(candles, granularity, i_rej, i_con):
     """
     ASPMI hard-coded strategy:
       - MA1: SMMA(9) on HLC/3 (typical price)
@@ -283,8 +284,6 @@ def signal_for_timeframe(candles, tf):
     ma2 = smma_array(closes, 19)   # MA2 on Close
     ma3 = sma_array_prev_indicator(ma2, 25)  # MA3 on MA2 values
 
-    i_rej = len(candles) - 2
-    i_con = len(candles) - 1
 
     # require valid MA values
     try:
