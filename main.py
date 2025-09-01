@@ -503,9 +503,9 @@ def analyze_and_notify():
 
         for tf in TIMEFRAMES:
             candles = fetch_candles(symbol, tf, CANDLES_N)
-            if not candles:
-    results[tf] = (None, None)
-    continue
+     if not candles:
+         results[tf] = (None, None)
+         continue
 
 # define indices before calling signal_for_timeframe
 if len(candles) >= 2:  
