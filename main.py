@@ -216,8 +216,39 @@ def stacked_up(ma1, ma2, ma3, i, tol) -> bool:
 def stacked_down(ma1, ma2, ma3, i, tol) -> bool:
     return (ma1[i] is not None and ma2[i] is not None and ma3[i] is not None
             and ma1[i] <= ma2[i] + tol and ma2[i] <= ma3[i] + tol)
+ 
+               # ====================================================================================
+               # === candle bit helpers (accept even tiny pin/doji) ===
+    def candle_bits_at(i):
+        o,h,l,c = float(opens[i]), float(highs[i]), float(lows[i]), float(closes[i])
+        body = abs(c - o)
+        r = max(h - l, 1e-12)
+        upper = h - max(o,c)
+        lower = min(o,c) - l
+        is_bull = c > o
+        is_bear = c < o
+        # doji: very small body relative to range (we accept even tiny)
+        is_doji = body <= 0.35 * r   # loose threshold so tiny dojis count
+        pin_low = (lower >= REJ_WICK_RATIO * body) and (lower > upper)
+        pin_high = (upper >= REJ_WICK_RATIO * body) and (upper > lower)
+        # engulfing relative to previous bar
+        engulf_bull = False
+        engulf_bear = False
+        if i > 0:
+            prev_o, prev_c = float(opens[i-1]), float(closes[i-1])
+            prev_body = abs(prev_c - prev_o)
+            if (prev_c < prev_o) and (c > o) and (o <= prev_c) and (c >= prev_o) and (body >= 0.5 * r):
+                engulf_bull = True
+            if (prev_c > prev_o) and (c < o) and (o >= prev_c) and (c <= prev_o) and (body >= 0.5 * r):
+                engulf_bear = True
+        return {
+            "o": o, "h": h, "l": l, "c": c, "body": body, "range": r,
+            "upper": upper, "lower": lower,
+            "is_bull": is_bull, "is_bear": is_bear,
+            "is_doji": is_doji, "pin_low": pin_low, "pin_high": pin_high,
+            "engulf_bull": engulf_bull, "engulf_bear": engulf_bear
+        }
 
-     # =========================
            # Unstrict signal logic
            # ==========================
 def signal_for_timeframe(candles, tf):
@@ -334,36 +365,6 @@ def signal_for_timeframe(candles, tf):
     if avg_body_10 > OVERSIZED_MULT * atr:
         return None, "ranging / oversized candles (avg body too large)"
 
-    # === candle bit helpers (accept even tiny pin/doji) ===
-    def candle_bits_at(i):
-        o,h,l,c = float(opens[i]), float(highs[i]), float(lows[i]), float(closes[i])
-        body = abs(c - o)
-        r = max(h - l, 1e-12)
-        upper = h - max(o,c)
-        lower = min(o,c) - l
-        is_bull = c > o
-        is_bear = c < o
-        # doji: very small body relative to range (we accept even tiny)
-        is_doji = body <= 0.35 * r   # loose threshold so tiny dojis count
-        pin_low = (lower >= REJ_WICK_RATIO * body) and (lower > upper)
-        pin_high = (upper >= REJ_WICK_RATIO * body) and (upper > lower)
-        # engulfing relative to previous bar
-        engulf_bull = False
-        engulf_bear = False
-        if i > 0:
-            prev_o, prev_c = float(opens[i-1]), float(closes[i-1])
-            prev_body = abs(prev_c - prev_o)
-            if (prev_c < prev_o) and (c > o) and (o <= prev_c) and (c >= prev_o) and (body >= 0.5 * r):
-                engulf_bull = True
-            if (prev_c > prev_o) and (c < o) and (o >= prev_c) and (c <= prev_o) and (body >= 0.5 * r):
-                engulf_bear = True
-        return {
-            "o": o, "h": h, "l": l, "c": c, "body": body, "range": r,
-            "upper": upper, "lower": lower,
-            "is_bull": is_bull, "is_bear": is_bear,
-            "is_doji": is_doji, "pin_low": pin_low, "pin_high": pin_high,
-            "engulf_bull": engulf_bull, "engulf_bear": engulf_bear
-        }
 
     prev_candle = candle_bits_at(i_rej - 1) if i_rej - 1 >= 0 else None
     rej = candle_bits_at(i_rej)
