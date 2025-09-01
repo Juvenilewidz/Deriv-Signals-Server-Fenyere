@@ -26,7 +26,7 @@ DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 # Assets & Timeframes (HARD-CODED)
 # ==========================
 ASSETS = ["R_10", "R_50", "R_75", "1HZ75V", "1HZ100V", "1HZ150V"]
-TIMEFRAMES = [300, 600]  # 5m, 10m
+TIMEFRAMES = [600, 900, 1200]  # 10m, 15m, 20m
 CANDLES_N = 120          # enough history for the MAs
 
 # ==========================
@@ -249,8 +249,8 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         return None, "insufficient history"
 
     # === params / tolerances ===
-    REJ_WICK_RATIO = 0.3      # treat even small pinbars as valid (1.0 = equal wick >= body)
-    OVERSIZED_MULT  = 1.5     # reject candles with body or range > OVERSIZED_MULT * ATR
+    REJ_WICK_RATIO = 0.2      # treat even small pinbars as valid (1.0 = equal wick >= body)
+    OVERSIZED_MULT  = 1.2     # reject candles with body or range > OVERSIZED_MULT * ATR
     MOMENTUM_ATR_FRAC = 0.015 # ATR must be <= 1.5% of price roughly (avoid high vol)
     EXHAUSTION_ATR_MULT = 1.8 # price must be within this ATR distance to rejected MA
     WIGGLE_FRAC = 0.25        # allow MAs slight unsorted wiggle as fraction of ATR
@@ -517,19 +517,28 @@ def analyze_and_notify():
             direction, reasons = signal_for_timeframe(candles, tf, i_rej, i_con)
             results[tf] = (direction, reasons)
 
-        # Pull 5-min (300s) and 10-min (600s) results
-        sig5, rsn5 = results.get(300, (None, None))
+        # Pull 10-min (600s), 15-min (600s) and 20-min (1200) results
         sig10, rsn10 = results.get(600, (None, None))
+        sig15, rsn15 = results.get(900, (None, None))
+        sig20, rsn20 = results.get(1200, (None, None))
 
         # If both TFs agree → Strong
-        if sig5 and sig10 and sig5 == sig10:
-            send_strong_signal(symbol, sig5, {300: rsn5, 600: rsn10})
+        if sig10 and sig15 and sig10 == sig15:
+            send_strong_signal(symbol, sig10, {600: rsn10, 900: rsn15})
+
+        if sig15 and sig20 and sig15 == sig20:
+            send_strong_signal(symbol, sig15, {900: rsn15, 1200: rsn20})
+
+        if sig10 and sig20 and sig10 == sig20:
+            send_strong_signal(symbol, sig10, {600: rsn10, 1200: rsn20})
 
         # Single-timeframe signals (no conflict)
-        elif sig5 and not sig10:
-            send_single_timeframe_signal(symbol, 300, sig5, rsn5)
-        elif sig10 and not sig5:
+        elif sig10 and not sig15:
             send_single_timeframe_signal(symbol, 600, sig10, rsn10)
+        elif sig15 and not sig20:
+            send_single_timeframe_signal(symbol, 900, sig15, rsn15)
+        elif sig20 and not sig15:
+            send_single_timeframe_signal(symbol, 1200, sig20, rsn20)
         else:
             # either both None or conflict → do nothing
             pass
