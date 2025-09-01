@@ -507,7 +507,7 @@ def analyze_and_notify():
                 results[tf] = (None, None)
                 continue
 
-            direction, reasons = signal_for_timeframe(candles, tf)
+            direction, reasons = signal_for_timeframe(candles, tf, i_rej, i_con)
             results[tf] = (direction, reasons)
 
         # Pull 5-min (300s) and 10-min (600s) results
