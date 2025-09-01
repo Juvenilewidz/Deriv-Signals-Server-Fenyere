@@ -68,3 +68,4 @@ def send_strong_signal(symbol: str, direction: str, reasons_by_tf: dict) -> None
         f"💪 <b>STRONG {direction.upper()}</b>\n"
         f"🧠 15m: {r15}\n"
         f"🧠 20m: {r20}"
+    )
