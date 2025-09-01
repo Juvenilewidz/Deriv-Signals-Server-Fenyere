@@ -184,6 +184,14 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
                       send_single_timeframe_signal(symbol, granularity, direction, reason)
         except:
            pass
+            finally:
+    try:
+        ws.close()
+    except:
+        pass
+
+return out
+
 # ==========================
 # MAs & trend
 # ==========================
