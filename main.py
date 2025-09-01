@@ -164,34 +164,34 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
 
         # also try to grab one tick update for the live candle
         try:
-            update = json.loads(ws.recv())
-            if "candles" in update and update["candles"]:
-                live_c = update["candles"][-1]
-                out[-1] = {  # replace last candle with latest forming one
-                    "epoch": int(live_c["epoch"]),
-                    "open":  float(live_c["open"]),
-                    "high":  float(live_c["high"]),
-                    "low":   float(live_c["low"]),
-                    "close": float(live_c["close"]),
-                }
+        update = json.loads(ws.recv())
+        if "candles" in update and update["candles"]:
+            live_c = update["candles"][-1]
+            out[-1] = {
+                "epoch": int(live_c["epoch"]),
+                "open": float(live_c["open"]),
+                "high": float(live_c["high"]),
+                "low": float(live_c["low"]),
+                "close": float(live_c["close"]),
+            }
 
-                # after appending new candle
-                if len(out) >= 2:
-                   i_rej = len(out) - 2
-                   i_con = len(out) - 1
-                   direction, reason = signal_for_timeframe(out, granularity, i_rej, i_con)
-                   if direction:
-                      send_single_timeframe_signal(symbol, granularity, direction, reason)
-        except:
-           pass
-            finally:
-    try:
-        ws.close()
+            if len(out) >= 2:
+                i_rej = len(out) - 2
+                i_con = len(out) - 1
+                direction, reason = signal_for_timeframe(out, granularity, i_rej, i_con)
+                if direction:
+                    send_single_timeframe_signal(symbol, granularity, direction, reason)
+
     except:
         pass
 
-return out
+    finally:
+        try:
+            ws.close()
+        except:
+            pass
 
+    return out
 # ==========================
 # MAs & trend
 # ==========================
