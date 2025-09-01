@@ -283,8 +283,15 @@ def signal_for_timeframe(candles, tf):
     ma2 = smma_array(closes, 19)   # MA2 on Close
     ma3 = sma_array_prev_indicator(ma2, 25)  # MA3 on MA2 values
 
-    i_rej = len(candles) - 2
-    i_con = len(candles) - 1
+    for i_rej in range(1, len(candles) - 1):
+    i_con = i_rej + 1
+
+    prev = candle_bits_at(candles, i_rej - 1)
+    rej  = candle_bits_at(candles, i_rej)
+    con  = candle_bits_at(candles, i_con)
+
+    # keep your existing rejection_ok / confirmation_ok / trend_ok / exhaustion_ok checks here
+    # if they pass, return the signal immediately
 
     # require valid MA values
     try:
