@@ -387,28 +387,28 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
             return None, "market too choppy / not moving in one direction"
 
      # === choose which MA is being retested (MA1 or MA2) ===
- def pick_ma_for_buy(i):
-    d1 = abs(lows[i] - ma1[i])
-    d2 = abs(lows[i] - ma2[i])
-    d3 = abs(lows[i] - ma3[i])
+    def pick_ma_for_buy(i):
+        d1 = abs(lows[i] - ma1[i])
+        d2 = abs(lows[i] - ma2[i])
+        d3 = abs(lows[i] - ma3[i])
     # pick whichever is closest
-    if d1 <= d2 and d1 <= d3:
-        return ("MA1", float(ma1[i]))
-    elif d2 <= d1 and d2 <= d3:
-        return ("MA2", float(ma2[i]))
-    else:
-        return ("MA3", float(ma3[i]))
+        if d1 <= d2 and d1 <= d3:
+            return ("MA1", float(ma1[i]))
+        elif d2 <= d1 and d2 <= d3:
+            return ("MA2", float(ma2[i]))
+        else:
+            return ("MA3", float(ma3[i]))
 
-def pick_ma_for_sell(i):
-    d1 = abs(highs[i] - ma1[i])
-    d2 = abs(highs[i] - ma2[i])
-    d3 = abs(highs[i] - ma3[i])
-    if d1 <= d2 and d1 <= d3:
-        return ("MA1", float(ma1[i]))
-    elif d2 <= d1 and d2 <= d3:
-        return ("MA2", float(ma2[i]))
-    else:
-        return ("MA3", float(ma3[i]))
+    def pick_ma_for_sell(i):
+        d1 = abs(highs[i] - ma1[i])
+        d2 = abs(highs[i] - ma2[i])
+        d3 = abs(highs[i] - ma3[i])
+        if d1 <= d2 and d1 <= d3:
+            return ("MA1", float(ma1[i]))
+        elif d2 <= d1 and d2 <= d3:
+            return ("MA2", float(ma2[i]))
+        else:
+            return ("MA3", float(ma3[i]))
     # === rejection logic ===
     def rejection_ok_buy(prev_c, rej_c, ma_val):
         # candle probes at/near MA and closes >= MA, and pattern is pin/doji/engulfing (tiny accepted)
