@@ -410,25 +410,6 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         else:
             return ("MA3", float(ma3[i]))
     # === rejection logic =================================================================================================================
-   # def rejection_ok_buy(prev_c, rej_c, ma_val):
-        # candle probes at/near MA and closes >= MA, and pattern is pin/doji/engulfing (tiny accepted)
-        prox = (rej_c["l"] <= ma_val + tiny)  # price probed down to MA
-        close_ok = (rej_c["c"] >= ma_val - tiny)  # closed at/above MA (not below)
-        if not (prox and close_ok):
-            return False, "rejection did not touch/close above MA"
-        # pattern acceptance: tiny doji/pin or bullish engulf
-        if rej_c["is_doji"] or rej_c["pin_low"] or rej_c["engulf_bull"]:
-            return True, "rejection pattern ok"
-        return False, "rejection pattern not recognized"
-
-  #  def rejection_ok_sell(prev_c, rej_c, ma_val):
-        prox = (rej_c["h"] >= ma_val - tiny)  # price probed up to MA
-        close_ok = (rej_c["c"] <= ma_val + tiny)  # closed at/below MA
-        if not (prox and close_ok):
-            return False, "rejection did not touch/close below MA"
-        if rej_c["is_doji"] or rej_c["pin_high"] or rej_c["engulf_bear"]:
-            return True, "rejection pattern ok"
-        return False, "rejection pattern not recognized"
         #=========================================================================================================
     # === Rejection Logic ===
      # === Rejection Logic ===
