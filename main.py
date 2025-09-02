@@ -390,11 +390,13 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
     def pick_ma_for_buy(i):
         d1 = abs(lows[i] - ma1[i])
         d2 = abs(lows[i] - ma2[i])
-        return ("MA1", float(ma1[i])) if d1 <= d2 else ("MA2", float(ma2[i]))
+        d3 = abs(lows[i] - ma3[i])
+        return ("MA1", float(ma1[i])) if d1 <= d2 else ("MA2", float(ma2[i])) else return ("MA3", float(ma3[i]))
     def pick_ma_for_sell(i):
         d1 = abs(highs[i] - ma1[i])
         d2 = abs(highs[i] - ma2[i])
-        return ("MA1", float(ma1[i])) if d1 <= d2 else ("MA2", float(ma2[i]))
+        d3 = abs(highs[i] - ma3[i])
+        return ("MA1", float(ma1[i])) if d1 <= d2 else ("MA2", float(ma2[i])) else return ("MA3", float(ma3[i]))
 
     # === rejection logic ===
     def rejection_ok_buy(prev_c, rej_c, ma_val):
@@ -418,25 +420,25 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         return False, "rejection pattern not recognized"
 
     # === confirmation checks ===
-    def confirmation_ok_buy(con_c, ma_val):
-        return con_c["is_bull"] and (con_c["c"] >= ma_val + tiny)
+   # def confirmation_ok_buy(con_c, ma_val):
+        #return con_c["is_bull"] and (con_c["c"] >= ma_val + tiny)
 
-    def confirmation_ok_sell(con_c, ma_val):
-        return con_c["is_bear"] and (con_c["c"] <= ma_val - tiny)
+    #def confirmation_ok_sell(con_c, ma_val):
+        #return con_c["is_bear"] and (con_c["c"] <= ma_val - tiny)
 
     # === exhaustion filter: price must not be stretched far from MA ===
     # (reject if rejection candle's close is > EXHAUSTION_ATR_MULT * ATR away from chosen MA)
     # Also ensure price hasn't touched MA3 recently (we require price "above MA3 but never touched it" for buys)
-    recent_lows_touch_ma3 = np.any(lows[-10:] <= ma3_rej + tiny)
-    recent_highs_touch_ma3 = np.any(highs[-10:] >= ma3_rej - tiny)  # symmetric check for sell
+    #recent_lows_touch_ma3 = np.any(lows[-10:] <= ma3_rej + tiny)
+    #recent_highs_touch_ma3 = np.any(highs[-10:] >= ma3_rej - tiny)  # symmetric check for sell
 
     # ---------------- BUY path ----------------
     if uptrend:
         # price must be above MA3 and should not have touched MA3 recently
         if not (closes[-1] > ma3_rej + tiny):
             return None, "buy rejected: price not above MA3"
-        if recent_lows_touch_ma3:
-            return None, "buy rejected: price touched MA3 recently"
+        #if recent_lows_touch_ma3:
+            #return None, "buy rejected: price touched MA3 recently"
 
         which_ma, ma_val = pick_ma_for_buy(i_rej)
         # ensure MA1 is near price packing order: MA1 close to price then MA2 then MA3
@@ -468,8 +470,8 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
     if downtrend:
         if not (closes[-1] < ma3_rej - tiny):
             return None, "sell rejected: price not below MA3"
-        if recent_highs_touch_ma3:
-            return None, "sell rejected: price touched MA3 recently"
+        #if recent_highs_touch_ma3:
+            #return None, "sell rejected: price touched MA3 recently"
 
         which_ma, ma_val = pick_ma_for_sell(i_rej)
         if not (ma1_rej <= ma2_rej + wiggle and ma2_rej <= ma3_rej + wiggle):
