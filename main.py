@@ -387,79 +387,125 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
             return None, "market too choppy / not moving in one direction"
 
      # === choose which MA is being retested (MA1 or MA2) ===
-    def pick_ma_for_buy(i):
-        d1 = abs(lows[i] - ma1[i])
-        d2 = abs(lows[i] - ma2[i])
-        d3 = abs(lows[i] - ma3[i])
-    # pick whichever is closest
-        if d1 <= d2 and d1 <= d3:
-            return ("MA1", float(ma1[i]))
-        elif d2 <= d1 and d2 <= d3:
-            return ("MA2", float(ma2[i]))
-        else:
-            return ("MA3", float(ma3[i]))
+    # ===== DYNAMIC S/R CORE HELPERS (drop-in replacement) =============================$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 
-    def pick_ma_for_sell(i):
-        d1 = abs(highs[i] - ma1[i])
-        d2 = abs(highs[i] - ma2[i])
-        d3 = abs(highs[i] - ma3[i])
-        if d1 <= d2 and d1 <= d3:
-            return ("MA1", float(ma1[i]))
-        elif d2 <= d1 and d2 <= d3:
-            return ("MA2", float(ma2[i]))
-        else:
-            return ("MA3", float(ma3[i]))
-    # === rejection logic =================================================================================================================
-        #=========================================================================================================
-    # === Rejection Logic ===
-     # === Rejection Logic ===
+def _atr_at(i):
+    # Works whether 'atr' is a scalar or an array-like
+    try:
+        return float(atr[i])
+    except Exception:
+        return float(atr)
 
-def is_trend_up(idx):
-    """Check uptrend: MA1 > MA2 > MA3"""
-    return ma1[idx] > ma2[idx] and ma2[idx] > ma3[idx]
+def _slope_ok_up(i, lookback=2):
+    if i - lookback < 0:
+        return False
+    return (ma1[i] > ma1[i - lookback]) and (ma2[i] > ma2[i - lookback]) and (ma3[i] > ma3[i - lookback])
 
-def is_trend_down(idx):
-    """Check downtrend: MA1 < MA2 < MA3"""
-    return ma1[idx] < ma2[idx] and ma2[idx] < ma3[idx]
+def _slope_ok_down(i, lookback=2):
+    if i - lookback < 0:
+        return False
+    return (ma1[i] < ma1[i - lookback]) and (ma2[i] < ma2[i - lookback]) and (ma3[i] < ma3[i - lookback])
 
+def _sep_ok(i, atr_mult=0.20):
+    a = _atr_at(i)
+    return (abs(ma1[i] - ma2[i]) > atr_mult * a) and (abs(ma2[i] - ma3[i]) > atr_mult * a)
 
-def rejection_ok_buy(idx):
+def is_trend_up(i):
+    # Strict uptrend: ordered + sloped + separated
+    return (ma1[i] > ma2[i] > ma3[i]) and _slope_ok_up(i) and _sep_ok(i)
+
+def is_trend_down(i):
+    # Strict downtrend: ordered + sloped + separated
+    return (ma1[i] < ma2[i] < ma3[i]) and _slope_ok_down(i) and _sep_ok(i)
+
+def _nearest_ma_for_buy(i):
     """
-    Buy rejection logic:
-    - Trend must be UP
-    - Candle must be pin/doji/engulf_bull
-    - Low touches or is near MA1 (within wiggle)
+    In an uptrend, price rejects 'dynamic support'.
+    Choose whichever of MA1/MA2 is NEARER to the candle's low/close.
     """
-    if not is_trend_up(idx):
-        return False, "trend not up"
+    c = candle_bits_at(i)
+    d1 = abs(c["l"] - ma1[i])
+    d2 = abs(c["l"] - ma2[i])
+    if d1 <= d2:
+        return "MA1", float(ma1[i])
+    return "MA2", float(ma2[i])
 
-    c = candle_bits_at(idx)  # current candle
-    prox = abs(c["l"] - ma1[idx]) <= (WIGGLE_FRAC * atr)
-    pattern_ok = c.get("is_doji") or c.get("pin_low") or c.get("engulf_bull")
-
-    if prox and pattern_ok:
-        return True, f"BUY | Trend=UP | MA=MA1 near | pattern={ 'Pin/Doji' }"
-    return False, "rejection not valid"
-
-
-def rejection_ok_sell(idx):
+def _nearest_ma_for_sell(i):
     """
-    Sell rejection logic:
-    - Trend must be DOWN
-    - Candle must be pin/doji/engulf_bear
-    - High touches or is near MA1 (within wiggle)
+    In a downtrend, price rejects 'dynamic resistance'.
+    Choose whichever of MA1/MA2 is NEARER to the candle's high/close.
     """
-    if not is_trend_down(idx):
-        return False, "trend not down"
+    c = candle_bits_at(i)
+    d1 = abs(c["h"] - ma1[i])
+    d2 = abs(c["h"] - ma2[i])
+    if d1 <= d2:
+        return "MA1", float(ma1[i])
+    return "MA2", float(ma2[i])
 
-    c = candle_bits_at(idx)  # current candle
-    prox = abs(c["h"] - ma1[idx]) <= (WIGGLE_FRAC * atr)
-    pattern_ok = c.get("is_doji") or c.get("pin_high") or c.get("engulf_bear")
+# Keep public names if other parts of your code call them
+def pick_ma_for_buy(i):
+    return _nearest_ma_for_buy(i)
 
-    if prox and pattern_ok:
-        return True, f"SELL | Trend=DOWN | MA=MA1 near | pattern={ 'Pin/Doji' }"
-    return False, "rejection not valid"
+def pick_ma_for_sell(i):
+    return _nearest_ma_for_sell(i)
 
+# ===== REJECTION AT/NEAR DYNAMIC S/R (NO CONFIRMATION) =====
+# NOTE: we keep the signature (prev_c, rej_c, ma_val, i) so existing calls still work.
+# We ignore passed ma_val and re-pick the nearer MA1/MA2 dynamically inside the function.
+
+def rejection_ok_buy(prev_c, rej_c, ma_val, i):
+    """
+    BUY: Only when
+      - Uptrend (MA1 > MA2 > MA3, sloped, separated)
+      - Rejection candle is Pin/Doji/Engulf Bull
+      - Candle forms AT or NEAR dynamic support (MA1 or MA2) within ATR-based buffer
+      - Fires on the rejection candle close (no next-candle confirmation)
+    """
+    if not is_trend_up(i):
+        return False, "not clean uptrend"
+
+    # choose MA zone dynamically (MA1 or MA2)
+    ma_name, zone = _nearest_ma_for_buy(i)
+    a = _atr_at(i)
+    buffer_ = max(WIGGLE_FRAC * a, 0.0)  # dynamic S/R acts as a zone
+
+    # proximity: low not far below zone; close back above/near zone
+    near_zone = abs(rej_c["l"] - zone) <= buffer_
+    close_side = (rej_c["c"] >= (zone - buffer_))
+
+    # pattern filter: pin/doji/engulf bull only
+    pattern_ok = bool(rej_c.get("is_doji") or rej_c.get("pin_low") or rej_c.get("engulf_bull"))
+
+    if near_zone and close_side and pattern_ok:
+        return True, f"{ma_name} dynamic support rejection (pin/doji/engulf) within {round(buffer_, 5)}"
+    return False, "no valid rejection at/near MA zone"
+
+def rejection_ok_sell(prev_c, rej_c, ma_val, i):
+    """
+    SELL: Only when
+      - Downtrend (MA1 < MA2 < MA3, sloped, separated)
+      - Rejection candle is Pin/Doji/Engulf Bear
+      - Candle forms AT or NEAR dynamic resistance (MA1 or MA2) within ATR-based buffer
+      - Fires on the rejection candle close (no next-candle confirmation)
+    """
+    if not is_trend_down(i):
+        return False, "not clean downtrend"
+
+    # choose MA zone dynamically (MA1 or MA2)
+    ma_name, zone = _nearest_ma_for_sell(i)
+    a = _atr_at(i)
+    buffer_ = max(WIGGLE_FRAC * a, 0.0)  # dynamic S/R acts as a zone
+
+    # proximity: high not far above zone; close back below/near zone
+    near_zone = abs(rej_c["h"] - zone) <= buffer_
+    close_side = (rej_c["c"] <= (zone + buffer_))
+
+    # pattern filter: pin/doji/engulf bear only
+    pattern_ok = bool(rej_c.get("is_doji") or rej_c.get("pin_high") or rej_c.get("engulf_bear"))
+
+    if near_zone and close_side and pattern_ok:
+        return True, f"{ma_name} dynamic resistance rejection (pin/doji/engulf) within {round(buffer_, 5)}"
+    return False, "no valid rejection at/near MA zone"
         #==========================================================================================================
 
     # === confirmation checks ===
