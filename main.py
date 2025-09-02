@@ -466,8 +466,8 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
             return None, "buy rejected: exhaustion (too far from MA)"
 
         # confirmation
-        if not confirmation_ok_buy(con, ma_val):
-            return None, "buy rejected: confirmation candle fail"
+        #if not confirmation_ok_buy(con, ma_val):
+            #return None, "buy rejected: confirmation candle fail"
 
         # extra momentum check: average recent range shouldn't be huge (avoid spikes)
         if avg_range_10 > OVERSIZED_MULT * atr:
@@ -495,8 +495,8 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         if abs(rej["c"] - ma_val) > EXHAUSTION_ATR_MULT * atr:
             return None, "sell rejected: exhaustion (too far from MA)"
 
-        if not confirmation_ok_sell(con, ma_val):
-            return None, "sell rejected: confirmation candle fail"
+       # if not confirmation_ok_sell(con, ma_val):
+            #return None, "sell rejected: confirmation candle fail"
 
         if avg_range_10 > OVERSIZED_MULT * atr:
             return None, "sell rejected: recent range too large (spiky)"
