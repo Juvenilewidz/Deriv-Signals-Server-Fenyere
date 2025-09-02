@@ -232,29 +232,28 @@ def stacked_down(ma1, ma2, ma3, i, tol) -> bool:
 
      # =========================
            # Unstrict signal logic
-           # ==========================
+     #======/====/=/========================================================================================== 
 def signal_for_timeframe(candles, granularity, i_rej, i_con):
     """
-    ASPMI hard-coded strategy:
-      - MA1: SMMA(9) on HLC/3 (typical price)
+    ASPMI dynamic support/resistance strategy:
+      - MA1: SMMA(9) on HLC/3
       - MA2: SMMA(19) on Close
-      - MA3: SMA(25) on MA2 (previous indicator data)
+      - MA3: SMA(25) on MA2
     Returns (direction, reason) where direction is "BUY"/"SELL"/None.
     """
-    import math
+
     import numpy as np
 
-    # minimal candles required
     if not candles or len(candles) < 60:
         return None, "insufficient history"
 
-    # === params / tolerances ===
-    REJ_WICK_RATIO = 0.2      # treat even small pinbars as valid (1.0 = equal wick >= body)
-    OVERSIZED_MULT  = 1.2     # reject candles with body or range > OVERSIZED_MULT * ATR
-    MOMENTUM_ATR_FRAC = 0.015 # ATR must be <= 1.5% of price roughly (avoid high vol)
-    EXHAUSTION_ATR_MULT = 1.8 # price must be within this ATR distance to rejected MA
-    WIGGLE_FRAC = 0.25        # allow MAs slight unsorted wiggle as fraction of ATR
-    CONSISTENT_DIR_PCT = 0.5  # last N bars must have >=60% same direction to be clear-moving
+    # === params ===
+    REJ_WICK_RATIO = 0.2
+    OVERSIZED_MULT = 1.2
+    MOMENTUM_ATR_FRAC = 0.015
+    EXHAUSTION_ATR_MULT = 1.8
+    WIGGLE_FRAC = 0.25
+    CONSISTENT_DIR_PCT = 0.5
     CONSISTENT_BARS = 8
 
     # === OHLC arrays ===
@@ -265,7 +264,7 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
     typical = (highs + lows + closes) / 3.0
     last_price = float(closes[-1])
 
-    # === utility MA functions ===
+    # === utility MAs ===
     def smma_array(values, period):
         vals = np.asarray(values, dtype=float)
         if len(vals) < period:
@@ -279,7 +278,6 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         return np.array(out, dtype=float)
 
     def sma_array_prev_indicator(values, period):
-        # SMA computed over a series that may contain NaNs; compute only when window has finite values
         vals = np.asarray(values, dtype=float)
         out = np.full(len(vals), np.nan)
         window = []
@@ -292,44 +290,39 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         return out
 
     # === compute MAs ===
-    ma1 = smma_array(typical, 9)   # MA1 on HLC/3
-    ma2 = smma_array(closes, 19)   # MA2 on Close
-    ma3 = sma_array_prev_indicator(ma2, 25)  # MA3 on MA2 values
+    ma1 = smma_array(typical, 9)
+    ma2 = smma_array(closes, 19)
+    ma3 = sma_array_prev_indicator(ma2, 25)
 
-
-    # require valid MA values
     try:
         ma1_rej, ma2_rej, ma3_rej = float(ma1[i_rej]), float(ma2[i_rej]), float(ma3[i_rej])
         ma1_con, ma2_con, ma3_con = float(ma1[i_con]), float(ma2[i_con]), float(ma3[i_con])
     except Exception:
         return None, "invalid/insufficient MA data"
 
-    # === ATR & basic stats ===
+    # === ATR ===
     rngs = highs - lows
     atr = float(np.mean(rngs[-14:])) if len(rngs) >= 14 else float(np.mean(rngs))
     tiny = max(1e-9, 0.05 * atr)
 
-    # avoid extremely high volatility
     if atr > MOMENTUM_ATR_FRAC * last_price:
         return None, "momentum too volatile (ATR too large)"
 
-    # consecutive direction check (ensure price moving one clear direction)
+    # === consistency check ===
     directions = (closes[-CONSISTENT_BARS:] - opens[-CONSISTENT_BARS:]) > 0
     pct_up = float(np.sum(directions)) / CONSISTENT_BARS
     pct_down = 1.0 - pct_up
     consistent_up = pct_up >= CONSISTENT_DIR_PCT
     consistent_down = pct_down >= CONSISTENT_DIR_PCT
 
-    # also compute average body/range to detect oversized / choppy
     bodies = np.abs(closes - opens)
     avg_body_10 = float(np.mean(bodies[-10:])) if len(bodies) >= 10 else float(np.mean(bodies))
     avg_range_10 = float(np.mean(rngs[-10:])) if len(rngs) >= 10 else float(np.mean(rngs))
 
-    # detect overall "ranging" as unusually large recent bodies (user said range characterized by long candles)
     if avg_body_10 > OVERSIZED_MULT * atr:
-        return None, "ranging / oversized candles (avg body too large)"
+        return None, "ranging / oversized candles"
 
-    # === candle bit helpers (accept even tiny pin/doji) ===
+    # === candle parser ===
     def candle_bits_at(i):
         o,h,l,c = float(opens[i]), float(highs[i]), float(lows[i]), float(closes[i])
         body = abs(c - o)
@@ -338,24 +331,19 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         lower = min(o,c) - l
         is_bull = c > o
         is_bear = c < o
-        # doji: very small body relative to range (we accept even tiny)
-        is_doji = body <= 0.35 * r   # loose threshold so tiny dojis count
+        is_doji = body <= 0.35 * r
         pin_low = (lower >= REJ_WICK_RATIO * body) and (lower > upper)
         pin_high = (upper >= REJ_WICK_RATIO * body) and (upper > lower)
-        # engulfing relative to previous bar
         engulf_bull = False
         engulf_bear = False
         if i > 0:
             prev_o, prev_c = float(opens[i-1]), float(closes[i-1])
-            prev_body = abs(prev_c - prev_o)
-            if (prev_c < prev_o) and (c > o) and (o <= prev_c) and (c >= prev_o) and (body >= 0.5 * r):
+            if (prev_c < prev_o) and (c > o) and (o <= prev_c) and (c >= prev_o):
                 engulf_bull = True
-            if (prev_c > prev_o) and (c < o) and (o >= prev_c) and (c <= prev_o) and (body >= 0.5 * r):
+            if (prev_c > prev_o) and (c < o) and (o >= prev_c) and (c <= prev_o):
                 engulf_bear = True
         return {
-            "o": o, "h": h, "l": l, "c": c, "body": body, "range": r,
-            "upper": upper, "lower": lower,
-            "is_bull": is_bull, "is_bear": is_bear,
+            "o": o, "h": h, "l": l, "c": c,
             "is_doji": is_doji, "pin_low": pin_low, "pin_high": pin_high,
             "engulf_bull": engulf_bull, "engulf_bear": engulf_bear
         }
@@ -364,226 +352,76 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
     rej = candle_bits_at(i_rej)
     con = candle_bits_at(i_con)
 
-    # reject if either rejection or confirmation candle is oversized / spike
-    if rej["body"] > OVERSIZED_MULT * atr or rej["range"] > OVERSIZED_MULT * atr:
-        return None, "rejection candle oversized"
-    if con["body"] > OVERSIZED_MULT * atr or con["range"] > OVERSIZED_MULT * atr:
-        return None, "confirmation candle oversized"
+    if rej["o"] == rej["c"] and rej["h"] == rej["l"]:
+        return None, "invalid rejection candle"
 
-    # === trend check with wiggle ===
-    wiggle = WIGGLE_FRAC * atr
-    def is_trend_up(idx):
-        return (ma1[idx] >= ma2[idx] - wiggle) and (ma2[idx] >= ma3[idx] - wiggle)
-    def is_trend_down(idx):
-        return (ma1[idx] <= ma2[idx] + wiggle) and (ma2[idx] <= ma3[idx] + wiggle)
+    # === trend helpers (NOW correctly indented!) ===
+    def _atr_at(i):
+        try: return float(atr[i])
+        except Exception: return float(atr)
 
-    uptrend = is_trend_up(i_rej)
-    downtrend = is_trend_down(i_rej)
+    def _slope_ok_up(i, lookback=2):
+        if i - lookback < 0: return False
+        return (ma1[i] > ma1[i - lookback]) and (ma2[i] > ma2[i - lookback]) and (ma3[i] > ma3[i - lookback])
 
-    # ensure "price moving in one clear direction" to avoid choppy market
-    if not (consistent_up or consistent_down):
-        # still allow signals if trend is strongly stacked though
-        if not (uptrend or downtrend):
-            return None, "market too choppy / not moving in one direction"
+    def _slope_ok_down(i, lookback=2):
+        if i - lookback < 0: return False
+        return (ma1[i] < ma1[i - lookback]) and (ma2[i] < ma2[i - lookback]) and (ma3[i] < ma3[i - lookback])
 
-     # === choose which MA is being retested (MA1 or MA2) ===
-    # ===== DYNAMIC S/R CORE HELPERS (drop-in replacement) =============================$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+    def _sep_ok(i, atr_mult=0.20):
+        a = _atr_at(i)
+        return (abs(ma1[i] - ma2[i]) > atr_mult * a) and (abs(ma2[i] - ma3[i]) > atr_mult * a)
 
-def _atr_at(i):
-    # Works whether 'atr' is a scalar or an array-like
-    try:
-        return float(atr[i])
-    except Exception:
-        return float(atr)
+    def is_trend_up(i): return (ma1[i] > ma2[i] > ma3[i]) and _slope_ok_up(i) and _sep_ok(i)
+    def is_trend_down(i): return (ma1[i] < ma2[i] < ma3[i]) and _slope_ok_down(i) and _sep_ok(i)
 
-def _slope_ok_up(i, lookback=2):
-    if i - lookback < 0:
-        return False
-    return (ma1[i] > ma1[i - lookback]) and (ma2[i] > ma2[i - lookback]) and (ma3[i] > ma3[i - lookback])
+    def pick_ma_for_buy(i):
+        c = candle_bits_at(i)
+        d1 = abs(c["l"] - ma1[i]); d2 = abs(c["l"] - ma2[i])
+        return ("MA1", float(ma1[i])) if d1 <= d2 else ("MA2", float(ma2[i]))
 
-def _slope_ok_down(i, lookback=2):
-    if i - lookback < 0:
-        return False
-    return (ma1[i] < ma1[i - lookback]) and (ma2[i] < ma2[i - lookback]) and (ma3[i] < ma3[i - lookback])
+    def pick_ma_for_sell(i):
+        c = candle_bits_at(i)
+        d1 = abs(c["h"] - ma1[i]); d2 = abs(c["h"] - ma2[i])
+        return ("MA1", float(ma1[i])) if d1 <= d2 else ("MA2", float(ma2[i]))
 
-def _sep_ok(i, atr_mult=0.20):
-    a = _atr_at(i)
-    return (abs(ma1[i] - ma2[i]) > atr_mult * a) and (abs(ma2[i] - ma3[i]) > atr_mult * a)
+    def rejection_ok_buy(rej_c, i):
+        if not is_trend_up(i): return False, "not uptrend"
+        ma_name, zone = pick_ma_for_buy(i)
+        buffer_ = WIGGLE_FRAC * atr
+        near_zone = abs(rej_c["l"] - zone) <= buffer_
+        close_side = (rej_c["c"] >= (zone - buffer_))
+        pattern_ok = rej_c["is_doji"] or rej_c["pin_low"] or rej_c["engulf_bull"]
+        if near_zone and close_side and pattern_ok:
+            return True, f"{ma_name} support rejection"
+        return False, "not valid buy rejection"
 
-def is_trend_up(i):
-    # Strict uptrend: ordered + sloped + separated
-    return (ma1[i] > ma2[i] > ma3[i]) and _slope_ok_up(i) and _sep_ok(i)
+    def rejection_ok_sell(rej_c, i):
+        if not is_trend_down(i): return False, "not downtrend"
+        ma_name, zone = pick_ma_for_sell(i)
+        buffer_ = WIGGLE_FRAC * atr
+        near_zone = abs(rej_c["h"] - zone) <= buffer_
+        close_side = (rej_c["c"] <= (zone + buffer_))
+        pattern_ok = rej_c["is_doji"] or rej_c["pin_high"] or rej_c["engulf_bear"]
+        if near_zone and close_side and pattern_ok:
+            return True, f"{ma_name} resistance rejection"
+        return False, "not valid sell rejection"
 
-def is_trend_down(i):
-    # Strict downtrend: ordered + sloped + separated
-    return (ma1[i] < ma2[i] < ma3[i]) and _slope_ok_down(i) and _sep_ok(i)
+    # === BUY path ===
+    if is_trend_up(i_rej):
+        rej_ok, reason = rejection_ok_buy(rej, i_rej)
+        if rej_ok:
+            return "BUY", reason
+        return None, reason
 
-def _nearest_ma_for_buy(i):
-    """
-    In an uptrend, price rejects 'dynamic support'.
-    Choose whichever of MA1/MA2 is NEARER to the candle's low/close.
-    """
-    c = candle_bits_at(i)
-    d1 = abs(c["l"] - ma1[i])
-    d2 = abs(c["l"] - ma2[i])
-    if d1 <= d2:
-        return "MA1", float(ma1[i])
-    return "MA2", float(ma2[i])
+    # === SELL path ===
+    if is_trend_down(i_rej):
+        rej_ok, reason = rejection_ok_sell(rej, i_rej)
+        if rej_ok:
+            return "SELL", reason
+        return None, reason
 
-def _nearest_ma_for_sell(i):
-    """
-    In a downtrend, price rejects 'dynamic resistance'.
-    Choose whichever of MA1/MA2 is NEARER to the candle's high/close.
-    """
-    c = candle_bits_at(i)
-    d1 = abs(c["h"] - ma1[i])
-    d2 = abs(c["h"] - ma2[i])
-    if d1 <= d2:
-        return "MA1", float(ma1[i])
-    return "MA2", float(ma2[i])
-
-# Keep public names if other parts of your code call them
-def pick_ma_for_buy(i):
-    return _nearest_ma_for_buy(i)
-
-def pick_ma_for_sell(i):
-    return _nearest_ma_for_sell(i)
-
-# ===== REJECTION AT/NEAR DYNAMIC S/R (NO CONFIRMATION) =====
-# NOTE: we keep the signature (prev_c, rej_c, ma_val, i) so existing calls still work.
-# We ignore passed ma_val and re-pick the nearer MA1/MA2 dynamically inside the function.
-
-def rejection_ok_buy(prev_c, rej_c, ma_val, i):
-    """
-    BUY: Only when
-      - Uptrend (MA1 > MA2 > MA3, sloped, separated)
-      - Rejection candle is Pin/Doji/Engulf Bull
-      - Candle forms AT or NEAR dynamic support (MA1 or MA2) within ATR-based buffer
-      - Fires on the rejection candle close (no next-candle confirmation)
-    """
-    if not is_trend_up(i):
-        return False, "not clean uptrend"
-
-    # choose MA zone dynamically (MA1 or MA2)
-    ma_name, zone = _nearest_ma_for_buy(i)
-    a = _atr_at(i)
-    buffer_ = max(WIGGLE_FRAC * a, 0.0)  # dynamic S/R acts as a zone
-
-    # proximity: low not far below zone; close back above/near zone
-    near_zone = abs(rej_c["l"] - zone) <= buffer_
-    close_side = (rej_c["c"] >= (zone - buffer_))
-
-    # pattern filter: pin/doji/engulf bull only
-    pattern_ok = bool(rej_c.get("is_doji") or rej_c.get("pin_low") or rej_c.get("engulf_bull"))
-
-    if near_zone and close_side and pattern_ok:
-        return True, f"{ma_name} dynamic support rejection (pin/doji/engulf) within {round(buffer_, 5)}"
-    return False, "no valid rejection at/near MA zone"
-
-def rejection_ok_sell(prev_c, rej_c, ma_val, i):
-    """
-    SELL: Only when
-      - Downtrend (MA1 < MA2 < MA3, sloped, separated)
-      - Rejection candle is Pin/Doji/Engulf Bear
-      - Candle forms AT or NEAR dynamic resistance (MA1 or MA2) within ATR-based buffer
-      - Fires on the rejection candle close (no next-candle confirmation)
-    """
-    if not is_trend_down(i):
-        return False, "not clean downtrend"
-
-    # choose MA zone dynamically (MA1 or MA2)
-    ma_name, zone = _nearest_ma_for_sell(i)
-    a = _atr_at(i)
-    buffer_ = max(WIGGLE_FRAC * a, 0.0)  # dynamic S/R acts as a zone
-
-    # proximity: high not far above zone; close back below/near zone
-    near_zone = abs(rej_c["h"] - zone) <= buffer_
-    close_side = (rej_c["c"] <= (zone + buffer_))
-
-    # pattern filter: pin/doji/engulf bear only
-    pattern_ok = bool(rej_c.get("is_doji") or rej_c.get("pin_high") or rej_c.get("engulf_bear"))
-
-    if near_zone and close_side and pattern_ok:
-        return True, f"{ma_name} dynamic resistance rejection (pin/doji/engulf) within {round(buffer_, 5)}"
-    return False, "no valid rejection at/near MA zone"
-        #==========================================================================================================
-
-    # === confirmation checks ===
-   # def confirmation_ok_buy(con_c, ma_val):
-        #return con_c["is_bull"] and (con_c["c"] >= ma_val + tiny)
-
-    #def confirmation_ok_sell(con_c, ma_val):
-        #return con_c["is_bear"] and (con_c["c"] <= ma_val - tiny)
-
-    # === exhaustion filter: price must not be stretched far from MA ===
-    # (reject if rejection candle's close is > EXHAUSTION_ATR_MULT * ATR away from chosen MA)
-    # Also ensure price hasn't touched MA3 recently (we require price "above MA3 but never touched it" for buys)
-    #recent_lows_touch_ma3 = np.any(lows[-10:] <= ma3_rej + tiny)
-    #recent_highs_touch_ma3 = np.any(highs[-10:] >= ma3_rej - tiny)  # symmetric check for sell
-
-    # ---------------- BUY path ----------------
-    if uptrend:
-        # price must be above MA3 and should not have touched MA3 recently
-        if not (closes[-1] > ma3_rej + tiny):
-            return None, "buy rejected: price not above MA3"
-        #if recent_lows_touch_ma3:
-            #return None, "buy rejected: price touched MA3 recently"
-
-        which_ma, ma_val = pick_ma_for_buy(i_rej)
-        # ensure MA1 is near price packing order: MA1 close to price then MA2 then MA3
-        # check order with wiggle
-        if not (ma1_rej >= ma2_rej - wiggle and ma2_rej >= ma3_rej - wiggle):
-            return None, "buy rejected: MAs not stacked up"
-
-        rej_ok, rej_reason = rejection_ok_buy(prev_candle, rej, ma_val)
-        if not rej_ok:
-            return None, f"buy rejected: {rej_reason}"
-
-        # exhaustion: rejection close must be near MA (not far)
-        if abs(rej["c"] - ma_val) > EXHAUSTION_ATR_MULT * atr:
-            return None, "buy rejected: exhaustion (too far from MA)"
-
-        # confirmation
-        #if not confirmation_ok_buy(con, ma_val):
-            #return None, "buy rejected: confirmation candle fail"
-
-        # extra momentum check: average recent range shouldn't be huge (avoid spikes)
-        if avg_range_10 > OVERSIZED_MULT * atr:
-            return None, "buy rejected: recent range too large (spiky)"
-
-        # passed all -> BUY
-        reason = f"BUY | Trend=UP | MA={which_ma} rejected | pattern={ 'Doji' if rej['is_doji'] else ('Pin' if rej['pin_low'] else ('Engulf' if rej['engulf_bull'] else 'Unknown')) } | confirm_close={con['c']:.5f}"
-        return "BUY", reason
-
-    # ---------------- SELL path ----------------
-    if downtrend:
-        if not (closes[-1] < ma3_rej - tiny):
-            return None, "sell rejected: price not below MA3"
-        #if recent_highs_touch_ma3:
-            #return None, "sell rejected: price touched MA3 recently"
-
-        which_ma, ma_val = pick_ma_for_sell(i_rej)
-        if not (ma1_rej <= ma2_rej + wiggle and ma2_rej <= ma3_rej + wiggle):
-            return None, "sell rejected: MAs not stacked down"
-
-        rej_ok, rej_reason = rejection_ok_sell(prev_candle, rej, ma_val)
-        if not rej_ok:
-            return None, f"sell rejected: {rej_reason}"
-
-        if abs(rej["c"] - ma_val) > EXHAUSTION_ATR_MULT * atr:
-            return None, "sell rejected: exhaustion (too far from MA)"
-
-       # if not confirmation_ok_sell(con, ma_val):
-            #return None, "sell rejected: confirmation candle fail"
-
-        if avg_range_10 > OVERSIZED_MULT * atr:
-            return None, "sell rejected: recent range too large (spiky)"
-
-        reason = f"SELL | Trend=DOWN | MA={which_ma} rejected | pattern={ 'Doji' if rej['is_doji'] else ('Pin' if rej['pin_high'] else ('Engulf' if rej['engulf_bear'] else 'Unknown')) } | confirm_close={con['c']:.5f}"
-        return "SELL", reason
-
-    # otherwise no clear trend
-    return None, "no clear trend / signal"
+    return None, "no clear trend"
 
 # ==========================
 # Orchestrate: per asset, both TFs, resolve conflicts, notify
