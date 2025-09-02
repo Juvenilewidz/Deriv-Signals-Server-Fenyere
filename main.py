@@ -409,8 +409,8 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
             return ("MA2", float(ma2[i]))
         else:
             return ("MA3", float(ma3[i]))
-    # === rejection logic ===
-    def rejection_ok_buy(prev_c, rej_c, ma_val):
+    # === rejection logic =================================================================================================================
+   # def rejection_ok_buy(prev_c, rej_c, ma_val):
         # candle probes at/near MA and closes >= MA, and pattern is pin/doji/engulfing (tiny accepted)
         prox = (rej_c["l"] <= ma_val + tiny)  # price probed down to MA
         close_ok = (rej_c["c"] >= ma_val - tiny)  # closed at/above MA (not below)
@@ -421,7 +421,7 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
             return True, "rejection pattern ok"
         return False, "rejection pattern not recognized"
 
-    def rejection_ok_sell(prev_c, rej_c, ma_val):
+  #  def rejection_ok_sell(prev_c, rej_c, ma_val):
         prox = (rej_c["h"] >= ma_val - tiny)  # price probed up to MA
         close_ok = (rej_c["c"] <= ma_val + tiny)  # closed at/below MA
         if not (prox and close_ok):
@@ -429,6 +429,57 @@ def signal_for_timeframe(candles, granularity, i_rej, i_con):
         if rej_c["is_doji"] or rej_c["pin_high"] or rej_c["engulf_bear"]:
             return True, "rejection pattern ok"
         return False, "rejection pattern not recognized"
+        #=========================================================================================================
+    # === Rejection Logic ===
+     # === Rejection Logic ===
+
+def is_trend_up(idx):
+    """Check uptrend: MA1 > MA2 > MA3"""
+    return ma1[idx] > ma2[idx] and ma2[idx] > ma3[idx]
+
+def is_trend_down(idx):
+    """Check downtrend: MA1 < MA2 < MA3"""
+    return ma1[idx] < ma2[idx] and ma2[idx] < ma3[idx]
+
+
+def rejection_ok_buy(idx):
+    """
+    Buy rejection logic:
+    - Trend must be UP
+    - Candle must be pin/doji/engulf_bull
+    - Low touches or is near MA1 (within wiggle)
+    """
+    if not is_trend_up(idx):
+        return False, "trend not up"
+
+    c = candle_bits_at(idx)  # current candle
+    prox = abs(c["l"] - ma1[idx]) <= (WIGGLE_FRAC * atr)
+    pattern_ok = c.get("is_doji") or c.get("pin_low") or c.get("engulf_bull")
+
+    if prox and pattern_ok:
+        return True, f"BUY | Trend=UP | MA=MA1 near | pattern={ 'Pin/Doji' }"
+    return False, "rejection not valid"
+
+
+def rejection_ok_sell(idx):
+    """
+    Sell rejection logic:
+    - Trend must be DOWN
+    - Candle must be pin/doji/engulf_bear
+    - High touches or is near MA1 (within wiggle)
+    """
+    if not is_trend_down(idx):
+        return False, "trend not down"
+
+    c = candle_bits_at(idx)  # current candle
+    prox = abs(c["h"] - ma1[idx]) <= (WIGGLE_FRAC * atr)
+    pattern_ok = c.get("is_doji") or c.get("pin_high") or c.get("engulf_bear")
+
+    if prox and pattern_ok:
+        return True, f"SELL | Trend=DOWN | MA=MA1 near | pattern={ 'Pin/Doji' }"
+    return False, "rejection not valid"
+
+        #==========================================================================================================
 
     # === confirmation checks ===
    # def confirmation_ok_buy(con_c, ma_val):
