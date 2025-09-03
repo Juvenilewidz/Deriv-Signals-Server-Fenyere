@@ -326,82 +326,102 @@ def signal_for_timeframe(candles: List[Dict], granularity: int, i_rej: int, i_co
 # --------------------------
 # Make chart (candlesticks), zoomed: last_n default 100, right padding 10 bars
 # --------------------------
-def make_chart(candles: List[Dict], ma1, ma2, ma3, i_rej: int, direction: str,
-               symbol: str, tf: int, last_n: int = 100) -> Optional[str]:
+def make_chart(candles, ma1, ma2, ma3, i_rej_idx, direction, symbol, tf, reason):
     """
-    Returns path to temporary png chart showing the last `last_n` candles (or fewer)
-    and adding 10 bars padding on the right for breathing room.
+    Create a candlestick chart PNG and return the path.
+    - candles: list of dicts with 'epoch','open','high','low','close'
+    - ma1/ma2/ma3: lists/arrays (same length)
+    - i_rej_idx: index (into candles) of rejection candle (0..len-1)
+    - direction: 'BUY' or 'SELL' or 'REJECTED'
+    This implementation uses only matplotlib (no extra deps).
     """
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from matplotlib.patches import Rectangle
+    import tempfile
+    import math
+    from datetime import datetime
+
+    # prepare arrays
+    times = [datetime.utcfromtimestamp(c["epoch"]) for c in candles]
+    opens = [c["open"] for c in candles]
+    highs = [c["high"] for c in candles]
+    lows  = [c["low"] for c in candles]
+    closes= [c["close"] for c in candles]
+
+    x = mdates.date2num(times)
+    # candle width relative to time step (small so candles appear slim)
+    if len(x) >= 2:
+        width = (x[1] - x[0]) * 0.5
+    else:
+        width = 0.02
+
+    # figure styling: wide and short for long history look
+    fig, ax = plt.subplots(figsize=(12, 4), dpi=110)
+    ax.set_facecolor('white')
+
+    # draw candlesticks (wick + body)
+    for xi, o, h, l, c in zip(x, opens, highs, lows, closes):
+        color = '#2ca02c' if c >= o else '#d62728'  # green/red
+        # wick
+        ax.vlines(xi, l, h, linewidth=0.6, color='black', zorder=1)
+        # body as rectangle
+        lower = min(o, c)
+        height = max(1e-8, abs(c - o))
+        rect = Rectangle((xi - width*0.5, lower), width*0.9, height,
+                         facecolor=color, edgecolor='black', linewidth=0.4, zorder=2, alpha=0.9)
+        ax.add_patch(rect)
+
+    # helper to plot MA arrays (skip None / nan values)
+    def _plot_ma(arr, label, color, lw=1.2):
+        safe_y = []
+        for v in arr:
+            if v is None:
+                safe_y.append(float('nan'))
+            else:
+                # handle numpy nan
+                try:
+                    if math.isnan(v):
+                        safe_y.append(float('nan'))
+                    else:
+                        safe_y.append(v)
+                except Exception:
+                    safe_y.append(v)
+        ax.plot(x, safe_y, label=label, color=color, linewidth=lw, zorder=3)
 
     try:
-        n = min(last_n, len(candles))
-        offset = len(candles) - n
-        subset = candles[-n:]
-        xs = list(range(n))
-        opens = [c["open"] for c in subset]
-        highs = [c["high"] for c in subset]
-        lows = [c["low"] for c in subset]
-        closes = [c["close"] for c in subset]
-        times = [datetime.utcfromtimestamp(c["epoch"]) for c in subset]
+        _plot_ma(ma1, "MA1 (SMMA9 HLC/3)", color='#1f77b4')
+        _plot_ma(ma2, "MA2 (SMMA19 Close)", color='#ff7f0e')
+        _plot_ma(ma3, "MA3 (SMA25 of MA2)", color='#2ca02c')
+    except Exception:
+        pass
 
-        fig, ax = plt.subplots(figsize=(11, 5))
-        ax.set_title(f"{symbol} {tf//60}m | {direction}")
-        ax.set_ylabel("Price")
+    # mark rejection candle with a marker
+    if isinstance(i_rej_idx, int) and 0 <= i_rej_idx < len(x):
+        mark_y = closes[i_rej_idx]
+        color = 'red' if direction == 'SELL' else 'green'
+        ax.scatter([x[i_rej_idx]], [mark_y], s=60, marker='v' if direction == 'SELL' else '^',
+                   color=color, zorder=6, edgecolors='black')
 
-        width = 0.6
-        for i in range(n):
-            o = opens[i]; h = highs[i]; l = lows[i]; c = closes[i]
-            x = i
-            color = "#2ca02c" if c >= o else "#d62728"
-            ax.plot([x, x], [l, h], color="black", linewidth=0.6, zorder=1)
-            lower = min(o, c); height = max(abs(c - o), 0.0000001)
-            rect = patches.Rectangle((x - width/2, lower), width, height,
-                                     facecolor=color, edgecolor="black", linewidth=0.3, zorder=2)
-            ax.add_patch(rect)
+    # formatting
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+    ax.tick_params(axis='x', rotation=25)
+    ax.set_ylabel('Price')
+    ax.set_title(f"{symbol} | {int(tf/60)}m | {direction or 'REJECTED'}", fontsize=10)
 
-        # MA plotting (align indices)
-        ma1_vals = []
-        ma2_vals = []
-        ma3_vals = []
-        for i in range(offset, offset + n):
-            ma1_vals.append(np.nan if i >= len(ma1) or ma1[i] is None else ma1[i])
-            ma2_vals.append(np.nan if i >= len(ma2) or ma2[i] is None else ma2[i])
-            ma3_vals.append(np.nan if i >= len(ma3) or ma3[i] is None else ma3[i])
+    # set x-limits to include right-side padding (10 candles)
+    if len(x) >= 2:
+        dx = (x[-1] - x[0]) / max(1, len(x)-1)
+        ax.set_xlim(x[0] - dx*1.5, x[-1] + dx*10)
 
-        ax.plot(xs, ma1_vals, label="MA1 (SMMA9 HLC3)", linewidth=1.25)
-        ax.plot(xs, ma2_vals, label="MA2 (SMMA19 Close)", linewidth=1.0)
-        ax.plot(xs, ma3_vals, label="MA3 (SMA25 of MA2)", linewidth=0.9)
-        ax.legend(loc="upper left", fontsize="small")
+    plt.tight_layout(pad=1.0)
 
-        # mark rejection candle (if within subset)
-        if offset <= i_rej < offset + n:
-            idx = i_rej - offset
-            price = closes[idx]
-            marker_color = "red" if direction == "SELL" else "green"
-            ax.scatter([idx], [price], marker="v" if direction == "SELL" else "^",
-                       color=marker_color, s=140, zorder=6)
-
-        # x limits + right padding (10 bars)
-        ax.set_xlim(-1, n - 1 + 10)
-
-        # y padding
-        ymin, ymax = min(lows), max(highs)
-        pad = (ymax - ymin) * 0.08 if ymax > ymin else 1e-6
-        ax.set_ylim(ymin - pad, ymax + pad)
-
-        ax.set_xticks(xs[::max(1, n//8)])
-        ax.set_xticklabels([t.strftime("%H:%M") for t in times[::max(1, n//8)]], rotation=30)
-
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        fig.tight_layout()
-        plt.savefig(tmp.name, dpi=140)
-        plt.close(fig)
-        return tmp.name
-
-    except Exception as e:
-        log("make_chart error:", e)
-        return None
-
+    # write temporary png
+    tmpf = tempfile.NamedTemporaryFile(prefix="chart_", suffix=".png", delete=False)
+    fig.savefig(tmpf.name, bbox_inches='tight')
+    plt.close(fig)
+    return tmpf.name
 # --------------------------
 # Orchestrator: main runner
 # --------------------------
