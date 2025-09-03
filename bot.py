@@ -79,3 +79,19 @@ def send_strong_signal(symbol: str, direction: str, reasons: dict,
         sent = _send_photo(caption, chart_path)
     if not sent:
         _send_text(caption)
+
+# -------------------
+# New simplified heartbeat
+# -------------------
+
+def send_heartbeat(checked_assets: list[str]):
+    """Send a short heartbeat with checked assets."""
+    from datetime import datetime
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    msg = (
+        f"💓 Bot heartbeat\n"
+        f"⏰ No signals right now\n"
+        f"📊 Checked: {', '.join(checked_assets)}\n"
+        f"🕒 {now}"
+    )
+    _send_text(msg)
