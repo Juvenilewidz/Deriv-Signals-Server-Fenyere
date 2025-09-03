@@ -643,29 +643,19 @@ def analyze_and_notify():
     save_persistent_cache()
 
     # heartbeat logic: if no signal sent, send heartbeat text each HEARTBEAT_INTERVAL_HOURS
-    if not any_sent_this_run:
-        last_hb = last_heartbeat_time()
-        now = int(time.time())
-        if now - last_hb >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
-            # send heartbeat
-            body = "🤖 Bot heartbeat — alive. No signals right now.\n\nReport:\n" + "\n".join(report_lines[:20])
-            ok = False; info = "none"
-            if send_telegram_message:
-                try:
-                    send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, body)
-                    ok = True; info = "via bot helper"
-                except Exception as e:
-                    ok = False; info = str(e)
-            else:
-                ok, info = send_telegram_text_direct(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, body)
-            if ok:
-                set_heartbeat_time(now)
-                log("Heartbeat sent:", info)
-            else:
-                log("Heartbeat failed:", info)
+    # heartbeat logic: if no signal sent, send heartbeat text each HEARTBEAT_INTERVAL_HOURS
+if not any_sent_this_run:
+    last_hb = last_heartbeat_time()
+    now = int(time.time())
+    if now - last_hb >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
+        # send clean heartbeat with checked assets
+        send_heartbeat(ASSETS)
+        set_heartbeat_time(now)
+        log("Heartbeat sent (no signals).")
     else:
-        log("Signals were sent this run; skipping heartbeat.")
-
+        log("Heartbeat not due yet.")
+else:
+    log("Signals were sent this run; skipping heartbeat.")
 # Entry sleep mode (Zimbabwe TZ)
 if __name__ == "__main__":
     try:
