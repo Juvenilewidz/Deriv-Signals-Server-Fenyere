@@ -496,25 +496,25 @@ def analyze_and_notify():
         # done
 
     # heartbeat: short & concise
-    if not any_sent_this_run and HEARTBEAT_INTERVAL_HOURS > 0:
-        now = int(time.time())
-        since = now - last_heartbeat_sent
-        if since >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
-            checked_assets = ", ".join(ASSETS)
-            msg = (
-                "🤖 Bot heartbeat – alive\n"
-                "⏰ No signals right now.\n"
-                f"📊 Checked: {checked_assets}\n"
-                f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
-            )
-            try:
-                if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-                    send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
-                last_heartbeat_sent = now
-                with open(HEART_FILE, "w") as f:
-                    json.dump({"ts": now}, f)
-            except Exception as e:
-                log("heartbeat send failed:", e)
+    #if not any_sent_this_run and HEARTBEAT_INTERVAL_HOURS > 0:
+      #  now = int(time.time())
+      #  since = now - last_heartbeat_sent
+       # if since >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
+     #       checked_assets = ", ".join(ASSETS)
+      #      msg = (
+     #           "🤖 Bot heartbeat – alive\n"
+      #          "⏰ No signals right now.\n"
+      #          f"📊 Checked: {checked_assets}\n"
+     #           f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+     #       )
+     #       try:
+    #            if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+    #                send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
+     #           last_heartbeat_sent = now
+     #           with open(HEART_FILE, "w") as f:
+      #              json.dump({"ts": now}, f)
+     #       except Exception as e:
+      #          log("heartbeat send failed:", e)
     # persist
     save_cache()
     log("Analyze run complete.")
