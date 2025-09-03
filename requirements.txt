@@ -1,4 +1,4 @@
-websockets==10.4
+uwebsockets==10.4
 pandas==2.2.2
 numpy==1.26.4
 requests==2.31.0
@@ -8,3 +8,7 @@ numpy
 ta-lib
 python-telegram-bot
 requests
+websocket-client
+requests
+matplotlib
+numpy
