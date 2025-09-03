@@ -409,7 +409,15 @@ def build_caption_for_asset(symbol: str, chosen: Dict, per_tf_info: Dict[int, Di
     main_score = chosen.get("score", 0)
     main_pat = chosen.get("pattern", "None")
     main_reason = chosen.get("reason", "")
-    title = f"{symbol} | {tf_main//60}m | {main_dir} | s={main_score} | {main_pat}"
+
+    # pick emoji
+    if main_dir in ("BUY", "SELL"):
+        emoji = "✅"
+    else:
+        emoji = "❌"
+
+    title = f"{emoji} {symbol} | {tf_main//60}m | {main_dir} | s={main_score} | {main_pat}"
+
     # build other TFs blended lines
     other_lines = []
     for tf in sorted(per_tf_info.keys()):
@@ -420,11 +428,12 @@ def build_caption_for_asset(symbol: str, chosen: Dict, per_tf_info: Dict[int, Di
         bias = info.get("bias", "Neutral")
         s = info.get("score", 0)
         label = info.get("direction") or "Rejected"
-        other_lines.append(f"{tf//60}m → {label} ({pat}, {bias}) s={s}")
+        emoji_sub = "✅" if label in ("BUY", "SELL") else "❌"
+        other_lines.append(f"{emoji_sub} {tf//60}m → {label} ({pat}, {bias}) s={s}")
+
     footer = "\n".join(other_lines) if other_lines else ""
     caption = f"{title}\nReason: {main_reason}\n\nOther TFs:\n{footer}" if footer else f"{title}\nReason: {main_reason}"
     return caption
-
 # -------------------------
 # Main scanning & sending (single message per asset)
 # -------------------------
