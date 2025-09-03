@@ -704,33 +704,33 @@ def analyze_and_notify():
     save_persistent_cache()
 
     # heartbeat logic: if no signal sent, send heartbeat text each HEARTBEAT_INTERVAL_HOURS
-    if not any_sent_this_run:
-        last_hb = last_heartbeat_time()
-        now = int(time.time())
-        if now - last_hb >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
+    #if not any_sent_this_run:
+     #   last_hb = last_heartbeat_time()
+       # now = int(time.time())
+       # if now - last_hb >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
             # send clean heartbeat with checked assets
-            if send_heartbeat:
-                try:
-                    send_heartbeat(ASSETS)
-                except Exception as e:
-                    log("send_heartbeat failed:", e)
-            else:
+          #  if send_heartbeat:
+          #      try:
+              #      send_heartbeat(ASSETS)
+             #   except Exception as e:
+             #       log("send_heartbeat failed:", e)
+          #  else:
                 # fallback small formatted heartbeat
-                try:
-                    hb_msg = f"🤖 Bot heartbeat – alive\n⏰ No signals right now\n📊 Checked: {', '.join(ASSETS)}\n🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
-                    if send_telegram_message:
-                        send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, hb_msg)
-                    else:
-                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                                      data={"chat_id": TELEGRAM_CHAT_ID, "text": hb_msg}, timeout=15)
-                except Exception as e:
-                    log("heartbeat fallback send failed:", e)
-            set_heartbeat_time(now)
-            log("Heartbeat sent (no signals).")
-        else:
-            log("Heartbeat not due yet.")
-    else:
-        log("Signals were sent this run; skipping heartbeat.")
+             #   try:
+                #    hb_msg = f"🤖 Bot heartbeat – alive\n⏰ No signals right now\n📊 Checked: {', '.join(ASSETS)}\n🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                #    if send_telegram_message:
+                 #       send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, hb_msg)
+                    #else:
+                      #  requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+               ##                       data={"chat_id": TELEGRAM_CHAT_ID, "text": hb_msg}, timeout=15)
+               # except Exception as e:
+                    #log("heartbeat fallback send failed:", e)
+          #  set_heartbeat_time(now)
+           # log("Heartbeat sent (no signals).")
+       # else:
+       #     log("Heartbeat not due yet.")
+    #else:
+       # log("Signals were sent this run; skipping heartbeat.")
 
 # Entry sleep mode (Zimbabwe TZ)
 if __name__ == "__main__":
