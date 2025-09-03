@@ -21,11 +21,13 @@ try:
         send_single_timeframe_signal,
         send_strong_signal,
         send_telegram_message,
+        send_heartbeat,
     )
 except Exception:
     send_single_timeframe_signal = None
     send_strong_signal = None
     send_telegram_message = None
+    send_heartbeat = None
 
 # -------- Env / constants --------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
