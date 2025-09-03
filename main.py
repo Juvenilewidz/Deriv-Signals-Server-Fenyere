@@ -464,7 +464,7 @@ def analyze_and_notify():
                 ma1, ma2, ma3 = compute_mas(chosen_candles)
                 i_rej_chart = len(chosen_candles) - 2
                 chart_path = make_chart(chosen_candles, ma1, ma2, ma3, i_rej_chart,
-                                        direction_chosen, symbol, tf_chosen, last_n=100)
+                        direction_chosen, symbol, tf_chosen, reason_chosen)
                 caption = f"{symbol} | {tf_chosen//60}m | {direction_chosen}\n{reason_chosen}"
                 ok = False
                 # prefer bot helper if available
