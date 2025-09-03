@@ -644,18 +644,18 @@ def analyze_and_notify():
 
     # heartbeat logic: if no signal sent, send heartbeat text each HEARTBEAT_INTERVAL_HOURS
     # heartbeat logic: if no signal sent, send heartbeat text each HEARTBEAT_INTERVAL_HOURS
-if not any_sent_this_run:
-    last_hb = last_heartbeat_time()
-    now = int(time.time())
-    if now - last_hb >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
+    if not any_sent_this_run:
+        last_hb = last_heartbeat_time()
+        now = int(time.time())
+        if now - last_hb >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
         # send clean heartbeat with checked assets
-        send_heartbeat(ASSETS)
-        set_heartbeat_time(now)
-        log("Heartbeat sent (no signals).")
+            send_heartbeat(ASSETS)
+            set_heartbeat_time(now)
+            log("Heartbeat sent (no signals).")
+        else:
+            log("Heartbeat not due yet.")
     else:
-        log("Heartbeat not due yet.")
-else:
-    log("Signals were sent this run; skipping heartbeat.")
+        log("Signals were sent this run; skipping heartbeat.")
 # Entry sleep mode (Zimbabwe TZ)
 if __name__ == "__main__":
     try:
