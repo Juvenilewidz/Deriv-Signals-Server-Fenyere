@@ -1,118 +1,101 @@
-# bot.py
-"""
-Bot helpers: small, robust Telegram helpers used by main.py
-- send_single_timeframe_signal(symbol, tf, direction, reason, chart_path=None)
-- send_strong_signal(symbol, direction, reasons, chart_path=None)
-- send_rejection_with_chart(symbol, tf, candles, reason)
-- send_telegram_message(text)
-- send_heartbeat(checked_assets)
-"""
+# bot.py - helper functions to send Telegram messages/photos for the Deriv signal bot.
+# Self-contained: uses requests to call Telegram Bot API (no heavy external libs required).
 
 import os
 import requests
-from datetime import datetime
-import tempfile
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+from datetime import datetime, timezone
+from typing import Dict, List, Tuple, Optional
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/{method}"
 
-def _send_text(text: str) -> bool:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Missing Telegram token/chat")
-        return False
+def _safe_post(url: str, files=None, data=None, timeout=10):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=15)
-        return r.status_code == 200
+        if files:
+            r = requests.post(url, files=files, data=data, timeout=timeout)
+        else:
+            r = requests.post(url, json=data, timeout=timeout)
+        r.raise_for_status()
+        return True, r.json()
     except Exception as e:
-        print("send text err:", e)
-        return False
+        return False, str(e)
 
-def _send_photo(caption: str, filepath: str) -> bool:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Missing Telegram token/chat")
-        return False
-    if not filepath or not os.path.exists(filepath):
-        print("⚠️ missing chart file:", filepath)
-        return False
+def send_telegram_text_direct(token: str, chat_id: str, text: str) -> Tuple[bool, str]:
+    """Send plain text message via Telegram Bot API. Returns (ok, info)."""
+    if not token or not chat_id:
+        return False, "missing token/chat_id"
+    url = TELEGRAM_API_BASE.format(token=token, method="sendMessage")
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    ok, info = _safe_post(url, data=data)
+    return ok, info
+
+def send_telegram_message(token: str, chat_id: str, text: str) -> Tuple[bool, str]:
+    """Alias to text direct for backwards compatibility."""
+    return send_telegram_text_direct(token, chat_id, text)
+
+def send_telegram_photo(token: str, chat_id: str, caption: str, photo_path: str) -> Tuple[bool, str]:
+    """Send a photo (file) to Telegram. Returns (ok, info)."""
+    if not token or not chat_id:
+        return False, "missing token/chat_id"
+    url = TELEGRAM_API_BASE.format(token=token, method="sendPhoto")
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-        with open(filepath, "rb") as f:
+        with open(photo_path, "rb") as f:
             files = {"photo": f}
-            data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
-            r = requests.post(url, data=data, files=files, timeout=20)
-        return r.status_code == 200
+            data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+            ok, info = _safe_post(url, files=files, data=data)
+            return ok, info
     except Exception as e:
-        print("send photo err:", e)
-        return False
+        return False, str(e)
 
-def send_telegram_message(text: str):
-    """Public send text wrapper used by main.py for heartbeat/crash messages."""
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    body = f"{text}\n\n{now}"
-    _send_text(body)
+# Convenience functions used by main.py:
+def send_single_timeframe_signal(symbol: str, tf: int, direction: str, reason: str) -> Tuple[bool, str]:
+    """
+    Send a single-timeframe signal (text). tf is seconds (e.g. 600).
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return False, "telegram env not set"
+    tfm = f"{int(tf/60)}m"
+    emoji = "🎯" if direction in ("BUY","SELL") else "⚠️"
+    text = (
+        f"<b>{symbol}</b>\n"
+        f"⏰ {tfm}\n\n"
+        f"{emoji} <b>{direction}</b>\n\n"
+        f"🧠 Reason: {reason}"
+    )
+    return send_telegram_text_direct(token, chat_id, text)
 
-def send_heartbeat(checked_assets: list):
-    """Short heartbeat showing checked assets (used by main)."""
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+def send_strong_signal(symbol: str, direction: str, details: Dict[int, Tuple[Optional[str], Optional[str]]]) -> Tuple[bool, str]:
+    """
+    Send aggregated strong signal when multiple TFs agree.
+    Details is a dict mapping timeframe (seconds) -> (signal, reason)
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return False, "telegram env not set"
+    lines = []
+    for tf, val in sorted(details.items()):
+        sig, rsn = val if isinstance(val, (list,tuple)) else (None, None)
+        lines.append(f"{int(tf/60)}m: {sig or 'None'} -> {rsn or ''}")
+    text = (
+        f"🚀 <b>Strong signal</b>\n"
+        f"{symbol} — <b>{direction}</b>\n\n"
+        + "\n".join(lines)
+    )
+    return send_telegram_text_direct(token, chat_id, text)
+
+def send_heartbeat(checked_assets: List[str]):
+    """Compact heartbeat message per user request."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return False, "telegram env not set"
+    ts = datetime.utcnow().replace(tzinfo=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     msg = (
         "🤖 Bot heartbeat – alive\n"
         "⏰ No signals right now.\n"
         f"📊 Checked: {', '.join(checked_assets)}\n"
-        f"🕒 {now}"
+        f"🕒 {ts}"
     )
-    _send_text(msg)
-
-def send_single_timeframe_signal(symbol: str, tf: int, direction: str, reason: str, chart_path: str = None):
-    caption = f"📊 {symbol} | {tf//60}m | {direction}\n{reason}"
-    if chart_path:
-        ok = _send_photo(caption, chart_path)
-        if ok:
-            return True
-    return _send_text(caption)
-
-def send_strong_signal(symbol: str, direction: str, reasons: dict, chart_path: str = None):
-    tf_reasons = "\n".join([f"{tf//60}m: {r}" for tf, r in reasons.items()])
-    caption = f"💪 STRONG SIGNAL\n{symbol} | {direction}\n{tf_reasons}"
-    if chart_path:
-        ok = _send_photo(caption, chart_path)
-        if ok:
-            return True
-    return _send_text(caption)
-
-def send_rejection_with_chart(symbol: str, tf: int, candles: list, reason: str):
-    """Send a short rejection caption + chart (chart created here)."""
-    short_reason = str(reason).split(":")[-1].strip()
-    caption = f"❌ Rejected\n{symbol} | {tf//60}m\nReason: {short_reason}"
-    # build small chart (reuse a simple line snapshot to keep it light)
-    try:
-        times = [datetime.utcfromtimestamp(c["epoch"]) for c in candles]
-        closes = [c["close"] for c in candles]
-        # show last 100 candles
-        last_n = 100
-        if len(times) > last_n:
-            times = times[-last_n:]
-            closes = closes[-last_n:]
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(times, closes, linewidth=1)
-        ax.set_title(f"{symbol} {tf//60}m | Rejected")
-        ax.set_xlim(times[0], times[-1] + (times[-1] - times[0]) / max(1, int(last_n/10)))
-        ax.set_ylabel("Price")
-        plt.xticks(rotation=25)
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        plt.tight_layout()
-        plt.savefig(tmp.name, dpi=120)
-        plt.close(fig)
-        sent = _send_photo(caption, tmp.name)
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
-        if not sent:
-            _send_text(caption)
-    except Exception as e:
-        print("send_rejection_with_chart error:", e)
-        _send_text(caption)
+    return send_telegram_text_direct(token, chat_id, msg)
