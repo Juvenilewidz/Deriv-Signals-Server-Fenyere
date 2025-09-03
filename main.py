@@ -326,7 +326,8 @@ def signal_for_timeframe(candles: List[Dict], granularity: int, i_rej: int, i_co
 # --------------------------
 # Make chart (candlesticks), zoomed: last_n default 100, right padding 10 bars
 # --------------------------
-def make_chart(candles, ma1, ma2, ma3, i_rej_idx, direction, symbol, tf, reason):
+def make_chart(candles, ma1, ma2, ma3, i_rej_idx, direction,
+               symbol, tf, reason, last_n=None):
     """
     Create a candlestick chart PNG and return the path.
     - candles: list of dicts with 'epoch','open','high','low','close'
