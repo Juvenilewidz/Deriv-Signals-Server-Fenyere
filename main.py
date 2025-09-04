@@ -519,6 +519,7 @@ def build_chart_png(evald: Dict, symbol: str, outdir: str = None) -> Optional[st
 # -------------------------
 # Orchestration: analyze all assets, pick strongest TF per asset, send one message per asset
 # -------------------------
+
 def analyze_and_notify():
     load_cache()
     signals_sent = 0
@@ -528,28 +529,26 @@ def analyze_and_notify():
         try:
             log("Analyzing", symbol)
             per_tf_results = []
-            # for each desired TF, try to fetch. If fetch_candles returns None (unsupported granularity or no data),
-            # skip that TF but continue to others.
-        for tf in DESIRED_TIMEFRAMES:
-            df = fetch_candles(symbol, tf, CANDLES_FETCH_COUNT)
-            if df is None or len(df) < 8:
-                log(f"{symbol} {TF_LABEL.get(tf)}: no data or insufficient rows -> skip")
-                continue
 
-            res = evaluate_tf(df, tf)
-            if res:
-                # --- Apply weighting to prioritize 5m slightly ---
-                tf_weight = {300: 1.3, 600: 1.1, 900: 1.0}.get(tf, 1.0)
-                res["score"] = res.get("score", 0.0) * tf_weight
-                per_tf_results.append(res)   
+            # loop over all timeframes (no extra try)
+            for tf in DESIRED_TIMEFRAMES:
+                df = fetch_candles(symbol, tf, CANDLES_FETCH_COUNT)
+                if df is None or len(df) < 8:
+                    log(f"{symbol} {TF_LABEL.get(tf)}: no data or insufficient rows -> skip")
+                    continue
 
-    
+                res = evaluate_tf(df, tf)
+                if res:
+                    # Apply weighting to prioritize 5m slightly
+                    tf_weight = {300: 1.3, 600: 1.1, 900: 1.0}.get(tf, 1.0)
+                    res["score"] = res.get("score", 0.0) * tf_weight
+                    per_tf_results.append(res)
+
             if not per_tf_results:
-                # nothing returned by any TF -> still log
                 summary.append(f"{symbol}: no TF returned data")
                 continue
 
-            # choose best: prefer accepted True highest score; if none accepted, highest score rejection
+            # choose best: prefer accepted True highest score, else highest rejection
             accepted = [r for r in per_tf_results if r.get("accepted")]
             if accepted:
                 best = max(accepted, key=lambda x: x.get("score", 0.0))
@@ -560,7 +559,7 @@ def analyze_and_notify():
             other_lines = []
             for r in sorted(per_tf_results, key=lambda x: x.get("tf")):
                 tag = "✅" if r.get("accepted") else "❌"
-                other_lines.append(f"{TF_LABEL.get(r['tf'],'?')} {tag} s={r.get('score',0):.2f}")
+                other_lines.append(f"{TF_LABEL.get(r['tf'])} {tag} (score {r.get('score', 0.2):.2f})")
 
             # send alert for best (if not suppressed by cooldown)
             tf_best = best["tf"]
@@ -570,23 +569,24 @@ def analyze_and_notify():
             emoji = "✅" if best.get("accepted") else "❌"
 
             if should_send(symbol, tf_best, direction):
-                # build chart and send
                 chart = build_chart_png(best, symbol)
-                caption = f"{emoji} <b>{symbol}</b> — <b>{TF_LABEL.get(tf_best, tf_best)}</b> {direction}\n• {reason}\n• score={score:.2f}\n• Other TFs: {' | '.join(other_lines)}"
+                caption = f"{emoji} {symbol} | {TF_LABEL.get(tf_best)} | {direction} | s={score:.2f}\nReason: {reason}\nOther TFs:\n" + "\n".join(other_lines)
                 sent = False
+
                 if chart:
-                    sent = send_telegram_photo(chart, caption)
                     try:
+                        sent = send_tg_photo(chart, caption)
                         os.remove(chart)
                     except Exception:
                         pass
                 else:
-                    sent = send_telegram_text(caption)
+                    sent = send_tg_text(caption)
+
                 if sent:
-                    summary.append(f"{symbol}: sent {direction} {TF_LABEL.get(tf_best)} score={score:.2f}")
+                    summary.append(f"{symbol}: sent {direction} ({TF_LABEL.get(tf_best)}) score={score:.2f}")
                     signals_sent += 1
                 else:
-                    summary.append(f"{symbol}: failed send {direction} {TF_LABEL.get(tf_best)}")
+                    summary.append(f"{symbol}: failed send {direction} ({TF_LABEL.get(tf_best)})")
             else:
                 summary.append(f"{symbol}: suppressed duplicate or cooldown")
 
@@ -597,12 +597,10 @@ def analyze_and_notify():
         except Exception as e:
             log("Error analyzing", symbol, e)
             traceback.print_exc()
-            # send a per-asset error optionally
             try:
-                send_telegram_text(f"⚠️ {symbol} error: {e}")
+                send_tg_text(f"⚠️ {symbol} error: {e}")
             except Exception:
                 pass
-
     # optionally send heartbeat if muted is disabled and nothing sent
     if signals_sent == 0 and HEARTBEAT_INTERVAL_HOURS > 0:
         try:
