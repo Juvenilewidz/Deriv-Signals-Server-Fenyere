@@ -252,79 +252,209 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
 # -------------------------
 # Chart function (candles + MAs + padding)
 # -------------------------
-def make_chart(candles: List[Dict], ma1: List[Optional[float]], ma2: List[Optional[float]],
-               ma3: List[Optional[float]], rej_index: int, caption_title: str, symbol: str, tf: int,
-               last_n: int = LAST_N_CHART, pad: int = PAD_CANDLES) -> Optional[str]:
-    try:
-        total = len(candles)
-        show_n = min(last_n, total)
-        start = max(0, total - show_n)
-        chosen = candles[start: total]
-        xs = [datetime.utcfromtimestamp(c["epoch"]) for c in chosen]
-        opens = [c["open"] for c in chosen]
-        highs = [c["high"] for c in chosen]
-        lows = [c["low"] for c in chosen]
-        closes = [c["close"] for c in chosen]
+def make_chart(candles: List[Dict],
+               rej_index: int,
+               symbol: str,
+               tf: int,
+               last_n: int = 80,
+               pad: int = 10) -> Optional[str]:
+    """
+    Draw candlesticks + MAs using your exact MA params:
+      - MA1 = SMMA(9) on HLC/3 (typical price)
+      - MA2 = SMMA(19) on Close
+      - MA3 = SMA(25) on MA2 (previous indicator's data)
 
+    Important: MAs are computed on CLOSED bars only (we drop the last forming candle).
+    Inputs:
+      candles: list of dicts with keys 'epoch','open','high','low','close'
+      rej_index: index in the original candles list pointing to the rejection candle (usually len-2)
+      symbol, tf: used for title
+      last_n: how many candles to display (history)
+      pad: extra blank candles to the right for breathing room
+    Returns:
+      path to PNG image (temp file) or None on error.
+    """
+    try:
+        # minimal imports if called standalone (main.py normally already imports these)
+        import math
+        import tempfile
+        from matplotlib.patches import Rectangle
+        from datetime import datetime
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        total = len(candles)
+        if total == 0:
+            return None
+
+        # Drop the still-forming last candle for MA calculation and plotting (match MT5 closed-bar MAs)
+        # Note: this also matches MT5 behavior where indicators are calculated on closed bars only.
+        closed_candles = candles[:-1] if total >= 2 else candles[:]  # ensure at least 1 bar stays
+        if len(closed_candles) < 5:
+            # not enough closed bars to meaningfully plot
+            return None
+
+        # prepare arrays
+        epochs = np.array([c["epoch"] for c in closed_candles], dtype=float)
+        opens  = np.array([float(c["open"])  for c in closed_candles], dtype=float)
+        highs  = np.array([float(c["high"])  for c in closed_candles], dtype=float)
+        lows   = np.array([float(c["low"])   for c in closed_candles], dtype=float)
+        closes = np.array([float(c["close"]) for c in closed_candles], dtype=float)
+
+        # === SMMA implementation ===
+        def smma_array(values: np.ndarray, period: int) -> np.ndarray:
+            vals = np.asarray(values, dtype=float)
+            n = len(vals)
+            out = np.full(n, np.nan, dtype=float)
+            if n < period:
+                return out
+            # seed = SMA of first 'period' values
+            seed = float(np.mean(vals[:period]))
+            out[period - 1] = seed
+            prev = seed
+            for i in range(period, n):
+                prev = (prev * (period - 1) + float(vals[i])) / period
+                out[i] = prev
+            return out
+
+        def sma_array(values: np.ndarray, period: int) -> np.ndarray:
+            vals = np.asarray(values, dtype=float)
+            n = len(vals)
+            out = np.full(n, np.nan, dtype=float)
+            if n < period:
+                return out
+            s = np.cumsum(vals, dtype=float)
+            out[period - 1] = float(s[period - 1]) / period
+            for i in range(period, n):
+                out[i] = float((s[i] - s[i - period]) / period)
+            return out
+
+        # === compute MA inputs ===
+        # typical price HLC/3 for MA1
+        tp = (highs + lows + closes) / 3.0
+
+        ma1_arr = smma_array(tp, 9)     # SMMA(9) on HLC/3
+        ma2_arr = smma_array(closes, 19)# SMMA(19) on Close
+        # MA3: SMA(25) on MA2 values (use only finite entries of ma2)
+        # but keep alignment: compute SMA over the ma2_arr itself (NaNs handle missing early periods)
+        ma3_arr = sma_array(np.nan_to_num(ma2_arr, nan=np.nan), 25)
+        # Note: sma_array given NaNs becomes weird; safer to compute SMA only where ma2 has finite values:
+        # Recompute ma3 properly:
+        ma2_valid = np.where(np.isfinite(ma2_arr), ma2_arr, np.nan)
+        # rolling SMA mindful of NaNs:
+        def rolling_sma_on_valid(arr: np.ndarray, period: int) -> np.ndarray:
+            n = len(arr)
+            out = np.full(n, np.nan, dtype=float)
+            # maintain a queue of last valid values
+            vals = []
+            for i in range(n):
+                v = arr[i]
+                if not math.isnan(v):
+                    vals.append(v)
+                else:
+                    vals.append(np.nan)
+                # compute window
+                window = arr[max(0, i - period + 1):i + 1]
+                window = np.array([x for x in window if not math.isnan(x)], dtype=float)
+                if len(window) == period:
+                    out[i] = float(np.mean(window))
+                else:
+                    out[i] = np.nan
+            return out
+
+        ma3_arr = rolling_sma_on_valid(ma2_valid, 25)
+
+        # === select window for plotting (last_n closed candles) ===
+        show_n = min(last_n, len(closed_candles))
+        start = len(closed_candles) - show_n
+        plot_opens  = opens[start:]
+        plot_highs  = highs[start:]
+        plot_lows   = lows[start:]
+        plot_closes = closes[start:]
+        plot_epochs = epochs[start:]
+        plot_ma1 = ma1_arr[start:]
+        plot_ma2 = ma2_arr[start:]
+        plot_ma3 = ma3_arr[start:]
+
+        # build x positions 0..N-1
+        N = len(plot_closes)
+        xs = list(range(N))
+
+        # === Plotting ===
         fig, ax = plt.subplots(figsize=(11, 4), dpi=110)
-        ax.set_title(f"{caption_title}")
-        # draw candles
-        width = max(0.2, 0.6 * (80.0 / max(1, len(chosen))))
-        for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes)):
+        title = f"{symbol} | {tf//60}m"
+        ax.set_title(title, fontsize=10)
+
+        # candle width small so many candles fit
+        width = max(0.12, 0.6 * (80.0 / max(1.0, float(N))))
+        half_w = width / 2.0
+
+        for i in range(N):
+            o = plot_opens[i]; h = plot_highs[i]; l = plot_lows[i]; c = plot_closes[i]
             color = "#2ca02c" if c >= o else "#d62728"
             # wick
-            ax.plot([i, i], [l, h], color="black", linewidth=0.6, zorder=1)
-            # body
+            ax.plot([i, i], [l, h], color="black", linewidth=0.5, zorder=1)
+            # body rect
             lower = min(o, c)
             height = max(1e-9, abs(c - o))
-            rect = Rectangle((i - width/2, lower), width, height, facecolor=color, edgecolor="black", linewidth=0.25, zorder=2)
+            rect = Rectangle((i - half_w, lower), width, height, facecolor=color, edgecolor="black", linewidth=0.25, zorder=2)
             ax.add_patch(rect)
 
-        # MA overlay: align indices to the chosen window
-        ma1_vals = []
-        ma2_vals = []
-        ma3_vals = []
-        for i in range(start, total):
-            ma1_vals.append(ma1[i] if i < len(ma1) else None)
-            ma2_vals.append(ma2[i] if i < len(ma2) else None)
-            ma3_vals.append(ma3[i] if i < len(ma3) else None)
+        # MA lines: convert NaN to numpy NaN for plotting
+        def safe_list(vs):
+            return [float(x) if (x is not None and not (isinstance(x, float) and math.isnan(x))) else float('nan') for x in vs]
 
-        def plot_ma(vals, label, color):
-            y = [v if (v is not None and not (isinstance(v, float) and math.isnan(v))) else float('nan') for v in vals]
-            ax.plot(list(range(len(y))), y, label=label, color=color, linewidth=1.0, zorder=3)
         try:
-            plot_ma(ma1_vals, "MA1", "#1f77b4")
-            plot_ma(ma2_vals, "MA2", "#ff7f0e")
-            plot_ma(ma3_vals, "MA3", "#2ca02c")
+            ax.plot(xs, safe_list(plot_ma1), label="MA1 SMMA(9,HLC/3)", linewidth=1.0, zorder=3)
+            ax.plot(xs, safe_list(plot_ma2), label="MA2 SMMA(19,Close)", linewidth=1.0, zorder=3)
+            ax.plot(xs, safe_list(plot_ma3), label="MA3 SMA(25 of MA2)", linewidth=1.0, zorder=3)
             ax.legend(loc="upper left", fontsize=8)
         except Exception:
             pass
 
-        # mark rejection index if within shown window
-        if start <= rej_index < total:
-            idx = rej_index - start
-            price = chosen[idx]["close"]
-            marker_color = "red"
-            ax.scatter([idx], [price], marker="v", color=marker_color, s=120, zorder=6, edgecolors="black")
+        # mark rejection candle if it falls within closed_candles window
+        # Note: rej_index is index in original candles; after dropping last, map it if possible
+        if rej_index is not None:
+            if rej_index < len(closed_candles):
+                if rej_index >= start:
+                    idx = rej_index - start
+                    price = plot_closes[idx]
+                    # decide marker shape by small heuristic (if close < open -> sell-like marker)
+                    marker = "v" if plot_closes[idx] < plot_opens[idx] else "^"
+                    color = "red" if plot_closes[idx] < plot_opens[idx] else "green"
+                    ax.scatter([idx], [price], marker=marker, color=color, s=120, zorder=6, edgecolors="black")
 
-        # limits + right padding
-        ax.set_xlim(-1, len(chosen) - 1 + pad)
-        ymin, ymax = min(lows), max(highs)
+        # x-limits + right pad
+        ax.set_xlim(-1, N - 1 + pad)
+        ymin = float(np.nanmin(plot_lows)) if len(plot_lows) > 0 else 0.0
+        ymax = float(np.nanmax(plot_highs)) if len(plot_highs) > 0 else 1.0
         pad_y = (ymax - ymin) * 0.08 if ymax > ymin else 1e-6
         ax.set_ylim(ymin - pad_y, ymax + pad_y)
-        ax.set_xticks(range(0, len(chosen), max(1, len(chosen)//8)))
-        ax.set_xticklabels([xs[i].strftime("%H:%M\n%m-%d") for i in range(0, len(xs), max(1, len(xs)//8))], rotation=25)
 
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        # x ticks: show roughly 6 labels
+        step = max(1, N // 6)
+        ticks = list(range(0, N, step))
+        labels = []
+        for t in ticks:
+            ts = datetime.utcfromtimestamp(plot_epochs[t])
+            labels.append(ts.strftime("%m-%d\n%H:%M"))
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(labels, rotation=25, fontsize=8)
+
         fig.tight_layout()
-        fig.savefig(tmp.name, dpi=120)
+        tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        fig.savefig(tmpf.name, dpi=120)
         plt.close(fig)
-        return tmp.name
-    except Exception as e:
-        log("make_chart error:", e)
-        traceback.print_exc()
-        return None
+        return tmpf.name
 
+    except Exception as e:
+        # if anything goes wrong, log (if you have a logger) and return None
+        try:
+            import traceback
+            traceback.print_exc()
+        except Exception:
+            pass
+        return None
 # -------------------------
 # Scoring helper (same logic as before)
 # -------------------------
