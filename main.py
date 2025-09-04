@@ -258,7 +258,7 @@ def make_chart(candles: List[Dict], ma1: List[Optional[float]], ma2: List[Option
         lows = [c["low"] for c in chosen]
         closes = [c["close"] for c in chosen]
 
-        fig, ax = plt.subplots(figsize=(10, 6), dpi=110)
+        fig, ax = plt.subplots(figsize=(12, 4), dpi=110)
         ax.set_title(f"{symbol} | {tf//60}m | {reason}", fontsize=10)
 
         # draw candles (small width)
