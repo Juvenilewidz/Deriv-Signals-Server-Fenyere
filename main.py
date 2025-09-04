@@ -530,7 +530,6 @@ def analyze_and_notify():
             per_tf_results = []
             # for each desired TF, try to fetch. If fetch_candles returns None (unsupported granularity or no data),
             # skip that TF but continue to others.
-    try:
         for tf in DESIRED_TIMEFRAMES:
             df = fetch_candles(symbol, tf, CANDLES_FETCH_COUNT)
             if df is None or len(df) < 8:
