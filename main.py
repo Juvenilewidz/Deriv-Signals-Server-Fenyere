@@ -530,19 +530,21 @@ def analyze_and_notify():
             per_tf_results = []
             # for each desired TF, try to fetch. If fetch_candles returns None (unsupported granularity or no data),
             # skip that TF but continue to others.
-    for tf in DESIRED_TIMEFRAMES:
-        df = fetch_candles(symbol, tf, CANDLES_FETCH_COUNT)
-        if df is None or len(df) < 8:
-            log(f"{symbol} {TF_LABEL.get(tf)}: no data or insufficient rows -> skip")
-            continue
+    try:
+        for tf in DESIRED_TIMEFRAMES:
+            df = fetch_candles(symbol, tf, CANDLES_FETCH_COUNT)
+            if df is None or len(df) < 8:
+                log(f"{symbol} {TF_LABEL.get(tf)}: no data or insufficient rows -> skip")
+                continue
 
-        res = evaluate_tf(df, tf)
-        if res:
-            # --- Apply weighting to prioritize 5m slightly ---
-            tf_weight = {300: 1.3, 600: 1.1, 900: 1.0}.get(tf, 1.0)
-            res["score"] = res.get("score", 0.0) * tf_weight
-            per_tf_results.append(res)
+            res = evaluate_tf(df, tf)
+            if res:
+                # --- Apply weighting to prioritize 5m slightly ---
+                tf_weight = {300: 1.3, 600: 1.1, 900: 1.0}.get(tf, 1.0)
+                res["score"] = res.get("score", 0.0) * tf_weight
+                per_tf_results.append(res)   
 
+    
             if not per_tf_results:
                 # nothing returned by any TF -> still log
                 summary.append(f"{symbol}: no TF returned data")
