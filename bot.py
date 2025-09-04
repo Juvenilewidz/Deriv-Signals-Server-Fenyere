@@ -5,41 +5,32 @@ import traceback
 from typing import Optional
 import requests
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-_API = "https://api.telegram.org/bot{}/".format(TELEGRAM_BOT_TOKEN)
-
-def _post(method: str, data: dict, files=None) -> bool:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        # Local dry-run fallback prints so you can test without Telegram
-        print("[TG:{}] {}".format(method, {**data, **({'_has_file': bool(files)} if files else {})}))
-        return True
+def send_text(text: str):
+    """Send plain text message"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
-        url = _API + method
-        r = requests.post(url, data=data, files=files, timeout=30)
-        ok = r.ok and r.json().get("ok", False)
-        if not ok:
-            print("[TG ERROR]", r.text[:300])
-        return ok
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print("[TG EXC]", e)
-        return False
+        print("Telegram text send failed:", e)
 
-def send_text(text: str) -> bool:
-    return _post("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"})
+def send_photo(photo_path: str, caption: str = ""):
+    """Send photo with optional caption"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    with open(photo_path, "rb") as img:
+        files = {"photo": img}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
+        try:
+            requests.post(url, data=data, files=files, timeout=20)
+        except Exception as e:
+            print("Telegram photo send failed:", e)
 
-def send_photo(caption: str, photo_path: str) -> bool:
-    files = {"photo": open(photo_path, "rb")}
-    try:
-        return _post("sendPhoto", {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}, files)
-    finally:
-        try: files["photo"].close()
-        except: pass
-
-def notify_crash(where: str, err: Exception) -> None:
-    msg = f"⚠️ <b>Bot crashed</b> in <code>{where}</code>\n<code>{repr(err)}</code>\n<pre>{traceback.format_exc()[-1500:]}</pre>"
-    try:
-        send_text(msg)
-    except:
-        print("[CRASH-NOTIFY-FAIL]")
+def send_telegram_message(text: str, photo_path: str = None):
+    """Unified sender: if photo is provided, send with chart, else send plain text"""
+    if photo_path:
+        send_photo(photo_path, caption=text)
+    else:
+        send_text(text)
