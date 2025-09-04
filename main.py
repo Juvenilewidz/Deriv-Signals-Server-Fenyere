@@ -313,57 +313,51 @@ def evaluate_timeframe(candles: List[Dict], tf: int) -> Dict:
 # =========================
 # Chart builder (candlesticks + MAs; zoomed + padding)
 # =========================
+import mplfinance as mpf  # add this at the top of your file (pip install mplfinance)
+
 def build_chart_png(symbol: str, tf: int, evald: Dict, outdir: str) -> str:
-    opens  = evald["opens"]; highs = evald["highs"]; lows = evald["lows"]; closes = evald["closes"]
-    ma1 = evald["ma1"]; ma2 = evald["ma2"]; ma3 = evald["ma3"]
-    n = len(closes)
+    import pandas as pd
 
+    # Prepare dataframe for mplfinance
+    n = len(evald["closes"])
     look_start = max(0, n - CHART_LOOKBACK)
-    o = opens [look_start:n]
-    h = highs [look_start:n]
-    l = lows  [look_start:n]
-    c = closes[look_start:n]
-    m1 = ma1[look_start:n]
-    m2 = ma2[look_start:n]
-    m3 = ma3[look_start:n]
+    df = pd.DataFrame({
+        "Open":  evald["opens"][look_start:n],
+        "High":  evald["highs"][look_start:n],
+        "Low":   evald["lows"][look_start:n],
+        "Close": evald["closes"][look_start:n],
+    })
+    df.index = pd.RangeIndex(len(df))  # simple integer index for plotting
 
-    x = np.arange(len(o))
-    fig = plt.figure(figsize=(12, 6), dpi=120)
-    ax  = fig.add_subplot(111)
+    # Add MAs into overlays
+    add_plots = [
+        mpf.make_addplot(evald["ma1"][look_start:n], color="blue",  width=1.2),
+        mpf.make_addplot(evald["ma2"][look_start:n], color="orange",width=1.2),
+        mpf.make_addplot(evald["ma3"][look_start:n], color="green", width=1.2),
+    ]
 
-    # candlesticks (simple drawing)
-    width = 0.6
-    for i in range(len(o)):
-        col_up = c[i] >= o[i]
-        # wick
-        ax.vlines(i, l[i], h[i], linewidth=1)
-        # body
-        lower = min(o[i], c[i]); upper = max(o[i], c[i])
-        ax.add_patch(plt.Rectangle((i - width/2, lower), width, max(upper - lower, 1e-9),
-                                   fill=True, alpha=0.6 if col_up else 0.6))
-
-    # plot MAs
-    ax.plot(x, m1, linewidth=1.3, label="MA1 Smoothed(9) HLC/3")
-    ax.plot(x, m2, linewidth=1.3, label="MA2 Smoothed(19) Close")
-    ax.plot(x, m3, linewidth=1.3, label="MA3 SMA(25) on MA2")
-
-    # x-limits with RIGHT PADDING
-    ax.set_xlim(-1, len(x) - 1 + RIGHT_PADDING)
-
-    # title
+    # Title
     tf_text = TF_LABEL.get(tf, str(tf))
     verdict = "✅" if evald["accepted"] else "❌"
     dir_txt = evald.get("direction") or "-"
     score   = evald.get("score", 0.0)
-    ax.set_title(f"{symbol}  {tf_text}  {verdict} {dir_txt}  score={score:.2f}")
+    title   = f"{symbol}  {tf_text}  {verdict} {dir_txt}  score={score:.2f}"
 
-    ax.legend(loc="upper left", fontsize=8)
-    ax.grid(True, linewidth=0.3, alpha=0.4)
-    fig.tight_layout()
-
+    # Save chart with mplfinance
     outpath = os.path.join(outdir, f"{symbol}_{tf_text}.png")
-    fig.savefig(outpath)
-    plt.close(fig)
+    mpf.plot(
+        df,
+        type="candle",
+        style="yahoo",
+        addplot=add_plots,
+        title=title,
+        ylabel="Price",
+        volume=False,
+        figratio=(12,6),
+        figscale=1.2,
+        xlim=(-1, len(df) - 1 + RIGHT_PADDING),  # add right padding
+        savefig=dict(fname=outpath, dpi=120, bbox_inches="tight")
+    )
     return outpath
 
 # =========================
