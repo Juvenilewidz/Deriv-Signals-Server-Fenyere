@@ -16,3 +16,4 @@ websocket-client
 requests
 matplotlib
 numpy
+mplfinance
