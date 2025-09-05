@@ -182,6 +182,6 @@ def run():
                 send_telegram_message(TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,msg)
                 mark_sent(sym,d)
 
-if __name__=="__main__":
+#if __name__=="__main__":
    # send_telegram_message(TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,"✅ 1s bot (text-only) started")
  #   run()
