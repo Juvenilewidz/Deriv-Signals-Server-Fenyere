@@ -64,8 +64,8 @@ ASSETS = os.getenv("ASSETS", "R_10,R_50,R_75,1HZ75V,1HZ100V,1HZ150V").split(",")
 TIMEFRAMES = [300, 600, 900]  # seconds: 5m, 10m, 15m
 
 # Charting/history
-CANDLES_N = int(os.getenv("CANDLES_N", "400"))  # how many candles to fetch (history)
-LAST_N_CHART = int(os.getenv("LAST_N_CHART", "220"))  # how many last candles to show in chart (more history)
+CANDLES_N = int(os.getenv("CANDLES_N", "200"))  # how many candles to fetch (history)
+LAST_N_CHART = int(os.getenv("LAST_N_CHART", "150"))  # how many last candles to show in chart (more history)
 PAD_CANDLES = int(os.getenv("PAD_CANDLES", "10"))  # right padding as requested
 
 # Drawing
