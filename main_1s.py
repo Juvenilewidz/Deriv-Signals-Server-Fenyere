@@ -1,7 +1,10 @@
 # main_1s.py
 # Full 1s-specialized bot (paste-and-cruise)
-# Focused on: 1HZ75V, 1HZ100V, 1HZ150V
-# CANDLES_N = 200, TIMEFRAMES = [300,600,900]
+# - 1s indices only: 1HZ75V,1HZ100V,1HZ150V
+# - 5 minute timeframe only
+# - Robust fetch, charting, scoring, Telegram alerts
+# - CANDLES_N default = 400, DEBUG forced on
+# - MAX_SIGNALS_PER_RUN default = 6
 
 import os
 import json
@@ -12,7 +15,7 @@ import traceback
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
-# external deps: websocket-client, numpy, matplotlib
+# external deps
 import websocket
 import numpy as np
 import matplotlib
@@ -20,7 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-# Try to import telegram helpers from your existing bot.py
+# Try to import telegram helpers from your existing bot.py (preferred)
 try:
     from bot import (
         send_telegram_message,
@@ -29,7 +32,7 @@ try:
         send_telegram_photo
     )
 except Exception:
-    # safe fallbacks so file runs locally without bot.py
+    # safe fallbacks so file can be tested locally without bot.py
     def send_telegram_message(token, chat_id, text):
         print("[TELEGRAM TEXT]", text)
         return True, "fallback"
@@ -48,9 +51,9 @@ except Exception:
 
 
 # -------------------------
-# Config
+# Config (1s specialized)
 # -------------------------
-DEBUG = os.getenv("DEBUG", "0") in ("1", "true", "True", "yes")
+DEBUG = True  # forced on so runs are visible in logs
 
 DERIV_API_KEY = os.getenv("DERIV_API_KEY", "").strip()
 DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089").strip()
@@ -62,31 +65,34 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 if not DERIV_API_KEY:
     raise RuntimeError("Missing DERIV_API_KEY env var")
 
-# only 1s assets by default (can be overridden with ASSETS env)
+# Only 1s assets by default (can be overridden via ASSETS env var)
 ASSETS = os.getenv("ASSETS", "1HZ75V,1HZ100V,1HZ150V").split(",")
-TIMEFRAMES = [300, 600, 900]  # seconds => 5m, 10m, 15m
+ASSETS = [a.strip() for a in ASSETS if a.strip()]
 
-# History / charting
-CANDLES_N = int(os.getenv("CANDLES_N", "200"))  # default 200 for all assets in this file
+# Only 5 minute timeframe (user requested)
+TIMEFRAMES = [300]  # seconds: 5m only
+
+# Candle history defaults
+CANDLES_N = int(os.getenv("CANDLES_N", "400"))  # default 400 (override via env)
 LAST_N_CHART = int(os.getenv("LAST_N_CHART", "220"))
 PAD_CANDLES = int(os.getenv("PAD_CANDLES", "10"))
 
-# Drawing
+# Chart drawing
 CANDLE_WIDTH = float(os.getenv("CANDLE_WIDTH", "0.35"))
 
-# Dispatch / cooldown
-MAX_SIGNALS_PER_RUN = int(os.getenv("MAX_SIGNALS_PER_RUN", "6"))  # set to 6 for 1s bot
+# Controls
+MAX_SIGNALS_PER_RUN = int(os.getenv("MAX_SIGNALS_PER_RUN", "6"))  # increased for 1s bot
 ALERT_COOLDOWN_SECS = int(os.getenv("ALERT_COOLDOWN_SECS", "600"))
 
 # Heartbeat
 HEARTBEAT_INTERVAL_HOURS = float(os.getenv("HEARTBEAT_INTERVAL_HOURS", "0"))
 
-# Temp files for caches
+# Temp files for caches (separate names so no conflict with main bot)
 TMPDIR = tempfile.gettempdir()
 CACHE_FILE = os.path.join(TMPDIR, "fenyere_last_sent_1s.json")
 HEART_FILE = os.path.join(TMPDIR, "fenyere_last_heartbeat_1s.json")
 
-# in-memory
+# In-memory cache
 last_sent_cache: Dict[str, Dict] = {}
 
 
@@ -134,7 +140,7 @@ def mark_sent(symbol: str, direction: str, tf: int):
 
 
 # -------------------------
-# Math / MA helpers
+# MA implementations
 # -------------------------
 def smma(series: List[float], period: int) -> List[Optional[float]]:
     n = len(series)
@@ -186,11 +192,11 @@ def compute_mas_for_chart(candles: List[Dict]) -> Tuple[List[Optional[float]], L
 
 
 # -------------------------
-# Robust fetch (snapshot)
+# Robust but quiet fetch (snapshot mode)
 # -------------------------
 def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List[Dict]:
     """
-    Snapshot fetch with a few retries. Returns oldest-first list of candle dicts or [].
+    Snapshot fetch with retries. Returns oldest-first list of candle dicts or [].
     """
     MAX_RETRIES = 3
     for attempt in range(1, MAX_RETRIES + 1):
@@ -198,7 +204,7 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
         try:
             ws = websocket.create_connection(DERIV_WS_URL, timeout=18)
             ws.send(json.dumps({"authorize": DERIV_API_KEY}))
-            # consume auth reply
+            # try to consume auth reply if present
             try:
                 _ = ws.recv()
             except Exception:
@@ -229,13 +235,12 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
                     except Exception:
                         continue
                 parsed.sort(key=lambda x: x["epoch"])
+                log(f"Fetched {len(parsed)} candles for {symbol} @{granularity}s (attempt {attempt})")
                 return parsed
             else:
-                # nothing, retry
-                pass
-        except Exception:
-            # silent retry
-            pass
+                log(f"No candles in response for {symbol} @{granularity}s (attempt {attempt})")
+        except Exception as e:
+            log(f"fetch error for {symbol} @{granularity}s (attempt {attempt}): {e}")
         finally:
             try:
                 if ws:
@@ -243,11 +248,12 @@ def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List
             except Exception:
                 pass
         time.sleep(1)
+    log(f"FAILED to fetch candles for {symbol} @{granularity}s after {MAX_RETRIES} attempts")
     return []
 
 
 # -------------------------
-# Chart creation
+# Charting (compact)
 # -------------------------
 def make_chart(candles: List[Dict], ma1: List[Optional[float]], ma2: List[Optional[float]],
                ma3: List[Optional[float]], rej_index: int, reason: str, symbol: str, tf: int,
@@ -325,7 +331,7 @@ def make_chart(candles: List[Dict], ma1: List[Optional[float]], ma2: List[Option
 
 
 # -------------------------
-# Candle patterns & scoring
+# Candle bits & scoring
 # -------------------------
 def candle_bits(candle: Dict, prev: Optional[Dict] = None) -> Dict:
     o = float(candle["open"]); h = float(candle["high"]); l = float(candle["low"]); c = float(candle["close"])
@@ -355,6 +361,7 @@ def compute_score_for_rejection(candles: List[Dict], i_rej: int, ma1: List[Optio
         return 0, {}
     highs = np.array([c["high"] for c in candles], dtype=float)
     lows = np.array([c["low"] for c in candles], dtype=float)
+
     rngs = highs - lows
     atr = float(np.mean(rngs[-14:])) if len(rngs) >= 14 else float(np.mean(rngs))
     tiny = max(1e-9, 0.05 * atr)
@@ -420,20 +427,25 @@ def compute_score_for_rejection(candles: List[Dict], i_rej: int, ma1: List[Optio
 def analyze_and_notify():
     load_cache()
     signals_sent = 0
-    reports = []
+    reports: List[str] = []
 
     for symbol in ASSETS:
         symbol = symbol.strip()
+        if not symbol:
+            continue
         rejections = []
         accepted = []
 
         for tf in sorted(TIMEFRAMES):
+            log(f"{symbol}: fetching {CANDLES_N} candles for {tf}s")
             candles = fetch_candles(symbol, tf, CANDLES_N)
             if not candles or len(candles) < 6:
-                # last-resort try smaller fetch
-                small = fetch_candles(symbol, tf, max(50, CANDLES_N // 4))
+                # last-resort smaller fetch before skipping
+                small_count = max(50, CANDLES_N // 4)
+                log(f"{symbol} @{tf}s -> got {len(candles) if candles else 0} candles; trying fallback {small_count}")
+                small = fetch_candles(symbol, tf, small_count)
                 if not small or len(small) < 6:
-                    # skip this TF
+                    log(f"{symbol} @{tf}s -> insufficient candles after fallback, skipping TF")
                     continue
                 else:
                     candles = small
@@ -445,6 +457,7 @@ def analyze_and_notify():
             reason = ""
             try:
                 if ma1[i_rej] is not None and ma2[i_rej] is not None and ma3[i_rej] is not None:
+                    # BUY check (support rejection)
                     if ma1[i_rej] > ma2[i_rej] > ma3[i_rej]:
                         prev = candles[i_rej - 1] if i_rej - 1 >= 0 else None
                         bits = candle_bits(candles[i_rej], prev)
@@ -460,6 +473,7 @@ def analyze_and_notify():
                         if near and pattern_ok:
                             direction = "BUY"
                             reason = "MA support rejection"
+                    # SELL check (resistance rejection)
                     elif ma1[i_rej] < ma2[i_rej] < ma3[i_rej]:
                         prev = candles[i_rej - 1] if i_rej - 1 >= 0 else None
                         bits = candle_bits(candles[i_rej], prev)
@@ -490,6 +504,7 @@ def analyze_and_notify():
                 rej_reason = f"Rejected({pat})"
                 rejections.append({"tf": tf, "reason": rej_reason, "candles": candles, "score": score, "details": details, "i_rej": i_rej})
 
+        # choose best alert or rejection summary
         chosen_alert = None
         alert_type = None
         if accepted:
@@ -539,19 +554,24 @@ def analyze_and_notify():
                     else:
                         send_single_timeframe_signal(symbol, tf_ch, direction_ch, reason_ch)
                         sent_ok = True
-                except Exception:
+                except Exception as e:
                     sent_ok = False
+                    log(f"Error sending telegram for {symbol}: {e}")
 
                 if sent_ok:
                     mark_sent(symbol, direction_ch, tf_ch)
                     signals_sent += 1
                     reports.append(f"{symbol} -> SENT {direction_ch} @{tf_ch//60}m score={chosen_alert['score']}")
+                    log(f"Sent alert for {symbol} @{tf_ch//60}m {direction_ch} (s={chosen_alert['score']})")
                 else:
                     reports.append(f"{symbol} -> FAILED SEND {direction_ch} @{tf_ch//60}m")
+                    log(f"Failed to send alert for {symbol}")
             else:
                 reports.append(f"{symbol} -> SKIPPED cooldown for {direction_ch} @{tf_ch//60}m")
+                log(f"Skipped {symbol} due cooldown for {direction_ch}")
         else:
             reports.append(f"{symbol} -> no alerts chosen")
+            log(f"{symbol} -> no alerts chosen")
 
         if not chosen_alert and rejections and DEBUG:
             sorted_rej = sorted(rejections, key=lambda x: x["score"], reverse=True)
@@ -559,9 +579,10 @@ def analyze_and_notify():
             log(f"{symbol} rejections summary (no chart sent):", " | ".join(summary_lines))
 
         if signals_sent >= MAX_SIGNALS_PER_RUN:
+            log("Reached MAX_SIGNALS_PER_RUN for this run")
             break
 
-    # heartbeat
+    # heartbeat if nothing sent and heartbeat enabled
     if signals_sent == 0 and HEARTBEAT_INTERVAL_HOURS > 0:
         try:
             last_h = 0
@@ -574,9 +595,12 @@ def analyze_and_notify():
             now = int(time.time())
             if now - last_h >= int(HEARTBEAT_INTERVAL_HOURS * 3600):
                 checked = ", ".join(ASSETS)
-                hb = f"🤖 Bot heartbeat – alive\n⏰ No signals right now.\n📊 Checked: {checked}\n🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                hb = f"🤖 1s Bot heartbeat – alive\n⏰ No signals right now.\n📊 Checked: {checked}\n🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
                 if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-                    send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, hb)
+                    try:
+                        send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, hb)
+                    except Exception:
+                        pass
                 with open(HEART_FILE, "w") as f:
                     json.dump({"ts": now}, f)
         except Exception:
@@ -588,9 +612,16 @@ def analyze_and_notify():
 
 
 # -------------------------
-# Entry
+# Entry point
 # -------------------------
 if __name__ == "__main__":
+    # startup heartbeat so you always get at least one Telegram message (useful to confirm secrets)
+    try:
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "✅ 1s bot started and analyzing 5m timeframe...")
+    except Exception as e:
+        log("Startup heartbeat failed:", e)
+
     try:
         analyze_and_notify()
     except Exception as e:
@@ -599,4 +630,6 @@ if __name__ == "__main__":
                 send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"❌ 1s Bot crashed: {e}")
         except Exception:
             pass
+        log("Fatal error in analyze_and_notify:", e)
+        traceback.print_exc()
         raise
