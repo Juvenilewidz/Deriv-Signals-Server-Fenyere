@@ -184,52 +184,125 @@ def compute_mas_for_chart(candles: List[Dict]) -> Tuple[List[Optional[float]], L
 # Fetch candles (Deriv)
 # -------------------------
 def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List[Dict]:
-    """Fetch candles from Deriv using websocket. Returns list of candles (oldest first)."""
-    try:
-        ws = websocket.create_connection(DERIV_WS_URL, timeout=12)
-    except Exception as e:
-        log("WS connect failed:", e)
-        return []
-    try:
-        ws.send(json.dumps({"authorize": DERIV_API_KEY}))
-        _auth = json.loads(ws.recv())
+    """
+    Robust fetch for Deriv candles:
+     - Uses subscribe=0 for history snapshot requests (faster)
+     - Retries a few times on failure
+     - If the single request returns fewer than `count`, will page backwards
+       (using 'end' = oldest_epoch - 1) to accumulate up to `count`.
+    Returns list of candles oldest-first or [] on failure.
+    """
+    MAX_RETRIES = 3
+    PAGE_SIZE = min(200, count)  # fetch pages up to this size (200 safer than huge counts)
+    all_candles: List[Dict] = []
 
+    def _request_history(ws, end_param, this_count):
         req = {
             "ticks_history": symbol,
             "style": "candles",
             "granularity": granularity,
-            "count": count,
-            "end": "latest",
-            "subscribe": 1
+            "count": this_count,
+            "end": end_param,
+            "subscribe": 0
         }
         ws.send(json.dumps(req))
-        resp = json.loads(ws.recv())
-        if "candles" not in resp or not resp["candles"]:
-            return []
-        out = []
-        for c in resp["candles"]:
-            out.append({
-                "epoch": int(c["epoch"]),
-                "open": float(c["open"]),
-                "high": float(c["high"]),
-                "low": float(c["low"]),
-                "close": float(c["close"])
-            })
-        # attempt one live update of the last candle
         try:
-            update = json.loads(ws.recv())
-            if "candles" in update and update["candles"]:
-                live_c = update["candles"][-1]
-                out[-1] = {
-                    "epoch": int(live_c["epoch"]),
-                    "open": float(live_c["open"]),
-                    "high": float(live_c["high"]),
-                    "low": float(live_c["low"]),
-                    "close": float(live_c["close"])
-                }
-        except Exception:
-            pass
-        return out
+            raw = ws.recv()
+            return json.loads(raw)
+        except Exception as e:
+            log("fetch_candles recv/json failed:", e)
+            return {}
+
+    # Try to connect (once). If connect fails, return [].
+    try:
+        ws = websocket.create_connection(DERIV_WS_URL, timeout=18)
+    except Exception as e:
+        log("WS connect failed:", e)
+        return []
+
+    try:
+        # authorize
+        try:
+            ws.send(json.dumps({"authorize": DERIV_API_KEY}))
+            auth_raw = ws.recv()
+            auth = json.loads(auth_raw)
+            if isinstance(auth, dict) and auth.get("error"):
+                log("Deriv auth error:", auth)
+                return []
+        except Exception as e:
+            log("Auth failure:", e)
+            return []
+
+        # page backwards and/or retry until we have enough candles or attempts exhausted
+        attempts = 0
+        end = "latest"
+        remaining = count
+
+        while len(all_candles) < count and attempts < MAX_RETRIES:
+            attempts += 1
+            this_fetch = min(PAGE_SIZE if PAGE_SIZE > 0 else count, remaining)
+            resp = _request_history(ws, end, this_fetch)
+            if not resp or "candles" not in resp or not resp["candles"]:
+                log(f"fetch attempt {attempts} for {symbol} tf={granularity} returned no candles (end={end})")
+                # small backoff
+                time.sleep(0.6 * attempts)
+                continue
+
+            # Deriv returns newest-first? In practice in your earlier code you treated the returned list as
+            # chronological (oldest-first). Ensure we normalize: if candles appear descending by epoch, reverse.
+            received = resp["candles"]
+            if len(received) >= 2 and received[0] and received[-1] and received[0].get("epoch", 0) > received[-1].get("epoch", 0):
+                received = list(reversed(received))
+
+            # convert to our canonical dicts (oldest-first)
+            parsed = []
+            for c in received:
+                try:
+                    parsed.append({
+                        "epoch": int(c["epoch"]),
+                        "open": float(c["open"]),
+                        "high": float(c["high"]),
+                        "low": float(c["low"]),
+                        "close": float(c["close"])
+                    })
+                except Exception:
+                    # ignore malformed candle
+                    continue
+
+            if not parsed:
+                log("parsed empty after conversion, skipping attempt", attempts)
+                time.sleep(0.4)
+                continue
+
+            # If this is the first page and end == "latest", just accept what we got (it will be newest->oldest maybe)
+            # We want all_candles to be oldest-first. Prepend pages because we're fetching newest-first pages going back.
+            # If we fetched with end="latest" and got oldest-first list, then appending is correct. To be safe, use epochs.
+            if not all_candles:
+                all_candles = parsed[:]  # start
+            else:
+                # insert older page before current list (since we are paging backwards)
+                # Choose correct merging based on epoch values:
+                if parsed[-1]["epoch"] < all_candles[0]["epoch"]:
+                    # parsed are older than existing -> prepend
+                    all_candles = parsed + all_candles
+                else:
+                    # fallback: append
+                    all_candles = all_candles + parsed
+
+            # update remaining and end param for next page
+            remaining = max(0, count - len(all_candles))
+            # set next end to oldest_epoch - 1 to page further back
+            oldest_epoch = all_candles[0]["epoch"] if all_candles else parsed[0]["epoch"]
+            end = oldest_epoch - 1
+
+            # small delay to be courteous
+            time.sleep(0.25)
+
+        # final sanity: ensure order oldest->newest
+        all_candles.sort(key=lambda x: x["epoch"])
+        # If still too few, still return what we have (calling code only requires len >= 6)
+        return all_candles
+
     except Exception as e:
         log("fetch_candles error:", e)
         return []
@@ -258,7 +331,7 @@ def make_chart(candles: List[Dict], ma1: List[Optional[float]], ma2: List[Option
         lows = [c["low"] for c in chosen]
         closes = [c["close"] for c in chosen]
 
-        fig, ax = plt.subplots(figsize=(12, 4), dpi=110)
+        fig, ax = plt.subplots(figsize=(10, 6), dpi=110)
         ax.set_title(f"{symbol} | {tf//60}m | {reason}", fontsize=10)
 
         # draw candles (small width)
