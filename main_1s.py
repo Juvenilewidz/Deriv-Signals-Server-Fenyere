@@ -23,7 +23,7 @@ try: from bot import ( send_telegram_message, send_single_timeframe_signal, send
 
 -------------------------
 
-Configuration (specialized for 1s indices)
+#Configuration (specialized for 1s indices)
 
 -------------------------
 
