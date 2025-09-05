@@ -100,7 +100,11 @@ def log(*args, **kwargs):
     if DEBUG:
         ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         print("[", ts, "]", *args, **kwargs)
-
+        
+#==========================================================================================================
+print(">>> DEBUG main_1s.py starting...")
+print("TELEGRAM_BOT_TOKEN length:", len(TELEGRAM_BOT_TOKEN))
+print("TELEGRAM_CHAT_ID:", TELEGRAM_CHAT_ID)
 
 # -------------------------
 # Persistence helpers
@@ -615,21 +619,23 @@ def analyze_and_notify():
 # Entry point
 # -------------------------
 if __name__ == "__main__":
-    # startup heartbeat so you always get at least one Telegram message (useful to confirm secrets)
+    print(">>> DEBUG: entered main_1s.py entrypoint")
+
     try:
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "✅ 1s bot started and analyzing 5m timeframe...")
+            ok, info = send_telegram_message(
+                TELEGRAM_BOT_TOKEN,
+                TELEGRAM_CHAT_ID,
+                "✅ main_1s.py startup heartbeat (5m timeframe, 1s indices)"
+            )
+            print(">>> DEBUG: heartbeat send result:", ok, info)
+        else:
+            print(">>> DEBUG: missing telegram token/chat id")
     except Exception as e:
-        log("Startup heartbeat failed:", e)
+        print(">>> DEBUG: heartbeat failed:", e)
 
     try:
         analyze_and_notify()
     except Exception as e:
-        try:
-            if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-                send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"❌ 1s Bot crashed: {e}")
-        except Exception:
-            pass
-        log("Fatal error in analyze_and_notify:", e)
+        print(">>> DEBUG: fatal error in analyze_and_notify:", e)
         traceback.print_exc()
-        raise
