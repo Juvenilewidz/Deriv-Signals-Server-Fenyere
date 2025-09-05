@@ -404,7 +404,7 @@ def compute_score_for_rejection(candles: List[Dict], i_rej: int, ma1: List[Optio
     else:
         proximity_score = 0
 
-    tf_weight = {300: 1, 600: 2, 900: 3}.get(tf, 1)
+    tf_weight = {300: 3, 600: 2, 900: 1}.get(tf, 1)
     body_small = 1 if bits["body"] <= 0.35 * bits["range"] else 0
 
     total = trend_score + pattern_score + proximity_score + tf_weight + body_small
