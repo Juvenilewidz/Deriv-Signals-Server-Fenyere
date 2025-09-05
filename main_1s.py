@@ -73,7 +73,7 @@ ASSETS = [a.strip() for a in ASSETS if a.strip()]
 TIMEFRAMES = [300]  # seconds: 5m only
 
 # Candle history defaults
-CANDLES_N = int(os.getenv("CANDLES_N", "400"))  # default 400 (override via env)
+CANDLES_N = int(os.getenv("CANDLES_N", "100"))  # default 400 (override via env)
 LAST_N_CHART = int(os.getenv("LAST_N_CHART", "220"))
 PAD_CANDLES = int(os.getenv("PAD_CANDLES", "10"))
 
