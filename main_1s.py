@@ -197,65 +197,62 @@ def compute_mas_for_chart(candles: List[Dict]) -> Tuple[List[Optional[float]], L
 
 # -------------------------
 # Robust but quiet fetch (snapshot mode)
-# -------------------------
+                                                                                  # -------------------------
 def fetch_candles(symbol: str, granularity: int, count: int = CANDLES_N) -> List[Dict]:
     """
-    Snapshot fetch with retries. Returns oldest-first list of candle dicts or [].
+    Robust fetch for 1s indices:
+    - Tries multiple candle counts [count, 200, 100, 50, 25]
+    - Each count is retried up to 3 times
+    - Returns [] only if *all* attempts fail
     """
     MAX_RETRIES = 3
-    for attempt in range(1, MAX_RETRIES + 1):
-        ws = None
-        try:
-            ws = websocket.create_connection(DERIV_WS_URL, timeout=18)
-            ws.send(json.dumps({"authorize": DERIV_API_KEY}))
-            # try to consume auth reply if present
-            try:
-                _ = ws.recv()
-            except Exception:
-                pass
+    fallback_counts = [count, 200, 100, 50, 25]
 
-            req = {
-                "ticks_history": symbol,
-                "style": "candles",
-                "granularity": granularity,
-                "count": count,
-                "end": "latest",
-                "subscribe": 0
-            }
-            ws.send(json.dumps(req))
-            raw = ws.recv()
-            resp = json.loads(raw)
-            if "candles" in resp and resp["candles"]:
-                parsed = []
-                for c in resp["candles"]:
-                    try:
-                        parsed.append({
-                            "epoch": int(c["epoch"]),
-                            "open": float(c["open"]),
-                            "high": float(c["high"]),
-                            "low": float(c["low"]),
-                            "close": float(c["close"])
-                        })
-                    except Exception:
-                        continue
-                parsed.sort(key=lambda x: x["epoch"])
-                log(f"Fetched {len(parsed)} candles for {symbol} @{granularity}s (attempt {attempt})")
-                return parsed
-            else:
-                log(f"No candles in response for {symbol} @{granularity}s (attempt {attempt})")
-        except Exception as e:
-            log(f"fetch error for {symbol} @{granularity}s (attempt {attempt}): {e}")
-        finally:
+    for fc in fallback_counts:
+        for attempt in range(1, MAX_RETRIES + 1):
+            ws = None
             try:
-                if ws:
-                    ws.close()
-            except Exception:
-                pass
-        time.sleep(1)
-    log(f"FAILED to fetch candles for {symbol} @{granularity}s after {MAX_RETRIES} attempts")
+                ws = websocket.create_connection(DERIV_WS_URL, timeout=18)
+                ws.send(json.dumps({"authorize": DERIV_API_KEY}))
+                _ = ws.recv()  # auth
+
+                req = {
+                    "ticks_history": symbol,
+                    "style": "candles",
+                    "granularity": granularity,
+                    "count": fc,
+                    "end": "latest",
+                    "subscribe": 0
+                }
+                ws.send(json.dumps(req))
+                raw = ws.recv()
+                resp = json.loads(raw)
+
+                if "candles" in resp and resp["candles"]:
+                    candles = [{
+                        "epoch": int(c["epoch"]),
+                        "open": float(c["open"]),
+                        "high": float(c["high"]),
+                        "low": float(c["low"]),
+                        "close": float(c["close"])
+                    } for c in resp["candles"]]
+                    candles.sort(key=lambda x: x["epoch"])
+                    log(f"{symbol} -> got {len(candles)} candles with count={fc}")
+                    return candles
+
+                log(f"{symbol} -> no candles (attempt {attempt}) with count={fc}")
+            except Exception as e:
+                log(f"{symbol} -> error fetching with count={fc}, attempt={attempt}, err={e}")
+            finally:
+                try:
+                    if ws:
+                        ws.close()
+                except Exception:
+                    pass
+            time.sleep(1)
+
+    log(f"{symbol} -> all attempts failed for granularity {granularity}")
     return []
-
-
 # -------------------------
 # Charting (compact)
 # -------------------------
