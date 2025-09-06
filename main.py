@@ -123,7 +123,7 @@ def fetch_candles(sym, tf, count=CANDLES_N):
 def make_chart(candles,ma1,ma2,ma3,i,reasons,sym,tf):
     n=len(candles); start=max(0,n-LAST_N_CHART); ch=candles[start:]
     xs=[datetime.fromtimestamp(c["epoch"],tz=timezone.utc) for c in ch]
-    fig,ax=plt.subplots(figsize=(12,5))
+    fig,ax=plt.subplots(figsize=(10,6))
     for j,c in enumerate(ch):
         o,h,l,cl=c["open"],c["high"],c["low"],c["close"]; col="g" if cl>=o else "r"
         ax.plot([j,j],[l,h],c="k",lw=0.6)
