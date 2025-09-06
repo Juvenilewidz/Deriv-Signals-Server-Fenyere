@@ -1,53 +1,39 @@
-#!/usr/bin/env python3
-"""
-main.py — Dynamic Support & Resistance (hardcoded, paste-and-cruise)
-
-Rules:
-- MA1 = SMMA(HLC3, 9)
-- MA2 = SMMA(Close, 19)
-- MA3 = SMA(MA2, 25)
-- Rejection families: pinbars (any), doji (any), engulfing (bull/bear), tiny-body
-- Signal fires if ANY condition is true:
-  1) Rejection-family candle touches/near MA1 or MA2
-  2) MA3 breakout + retest at/near MA1/MA2
-  3) Continuation trend (MA1>MA2>MA3 or reverse) + rejection near MA1/MA2
-- Near = ≤30% of same candle's range
-- Fire at candle close, deduped, chart attached
-"""
-
-import os, json, time, tempfile, traceback
-from datetime import datetime, timezone
-from typing import List, Dict, Optional, Tuple
-import websocket, numpy as np
-import matplotlib; matplotlib.use("Agg")
+import os, json, time, websocket
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from datetime import datetime
 from matplotlib.patches import Rectangle
 
 # Telegram helpers (your bot.py)
 try:
     from bot import send_telegram_message, send_telegram_photo
 except Exception:
-    def send_telegram_message(token, chat_id, text): print("[TEXT]", text); return True, "local"
-    def send_telegram_photo(token, chat_id, caption, photo): print("[PHOTO]", caption, photo); return True, "local"
+    def send_telegram_message(token, chat_id, text): print("TEXT:", text)
+    def send_telegram_photo(token, chat_id, caption, photo): print("PHOTO:", caption)
 
 # Config
 DERIV_API_KEY = os.getenv("DERIV_API_KEY","").strip()
-DERIV_APP_ID  = os.getenv("DERIV_APP_ID","1089").strip()
-DERIV_WS_URL  = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
+DERIV_APP_ID = os.getenv("DERIV_APP_ID","").strip()
+DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID","").strip()
-ASSETS = [s.strip() for s in os.getenv("ASSETS","R_10,R_50,R_75,V_75,V_100,V_150").split(",") if s.strip()]
-TIMEFRAMES = [int(x) for x in os.getenv("TIMEFRAMES","300").split(",")]  # 5m
-CANDLES_N = 180; LAST_N_CHART = 180; PAD_CANDLES = 10; CANDLE_WIDTH = 0.35
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID","").strip()
+ASSETS = [s.strip() for s in os.getenv("ASSETS","R_50,R_75,V_75,V_100").split(",")]
+TIMEFRAMES = [int(x) for x in os.getenv("TIMEFRAMES","300").split(",")]
+CANDLES_N = 100
+LAST_N_CHART = 80
+PAD_CANDLES = 10
+CANDLE_WIDTH = 0.4
 NEAR_FACTOR = 0.30
-TMPDIR = tempfile.gettempdir()
-ALERT_FILE = os.path.join(TMPDIR, "dsr_last_sent_main.json")
+TMPDIR = os.path.expanduser("~")
+ALERT_FILE = os.path.join(TMPDIR,"dsr_last_sent_main.json")
 
 # Persistence
-def load_persist(): 
+def load_persist():
     try: return json.load(open(ALERT_FILE))
     except: return {}
-def save_persist(d): 
+def save_persist(d):
     try: json.dump(d, open(ALERT_FILE,"w"))
     except: pass
 def already_sent(sym, tf, epoch, side):
@@ -58,52 +44,93 @@ def mark_sent(sym, tf, epoch, side):
 
 # MAs
 def smma(series, period):
-    n=len(series); 
+    n=len(series)
     if n<period: return [None]*n
-    seed=sum(series[:period])/period; out=[None]*(period-1)+[seed]; prev=seed
-    for i in range(period,n): prev=(prev*(period-1)+series[i])/period; out.append(prev)
+    out=[None]*(period-1); out.append(sum(series[:period])/period)
+    for i in range(period, n):
+        prev=out[-1]; out.append((prev*(period-1)+series[i])/period)
     return out
 def sma(series, period):
-    n=len(series); 
+    n=len(series)
     if n<period: return [None]*n
-    out=[None]*(period-1); run=sum(series[:period]); out.append(run/period)
-    for i in range(period,n): run+=series[i]-series[i-period+1]; out.append(run/period)
+    out=[None]*(period-1)
+    for i in range(period, n+1):
+        out.append(sum(series[i-period:i])/period)
     return out
 def compute_mas(candles):
     closes=[c["close"] for c in candles]; hlc3=[(c["high"]+c["low"]+c["close"])/3 for c in candles]
-    ma1=smma(hlc3,9); ma2=smma(closes,19)
-    ma2_vals=[v for v in ma2 if v]; ma3_raw=sma(ma2_vals,25) if len(ma2_vals)>=25 else []
-    ma3=[]; j=0
-    for v in ma2: ma3.append(ma3_raw[j] if v and j<len(ma3_raw) else None); j+=bool(v)
+    ma1=smma(hlc3,9); ma2=smma(closes,19); ma3_raw=sma(ma2,25)
+    ma3=[ma3_raw[j] if j<len(ma3_raw) else None for j in range(len(ma2))]
     return ma1,ma2,ma3
 
-# Candle families
+# Candle families (rejections)
 def candle_family(c, prev):
-    o,h,l,cl=c["open"],c["high"],c["low"],c["close"]; body=abs(cl-o); rng=max(1e-9,h-l)
-    up=h-max(o,cl); lo=min(o,cl)-l
-    if body<=0.15*rng: return "DOJI"
-    if up>=0.55*rng and body<=0.45*rng: return "PIN_HIGH"
-    if lo>=0.55*rng and body<=0.45*rng: return "PIN_LOW"
+    h,l,cl,op=c["high"],c["low"],c["close"],c["open"]
+    body=abs(cl-op); rng=h-l
+    if rng==0: return "NONE"
+    if body<=0.35*rng: return "DOJI"
+    if op<cl and cl>h-0.45*rng: return "PIN_HIGH"
+    if cl<op and cl<l+0.45*rng: return "PIN_LOW"
     if prev:
         po,pc=prev["open"],prev["close"]
-        if pc<po and cl>o and o<=pc and cl>=po: return "BULL_ENG"
-        if pc>po and cl<o and o>=pc and cl<=po: return "BEAR_ENG"
+        if pc<po and cl>op and cl>pc: return "BULL_ENG"
+        if pc>po and cl<op and cl<pc: return "BEAR_ENG"
     if body<=0.08*rng: return "TINY"
     return "NONE"
 
 # Trend helpers
-def in_uptrend(i,m1,m2,m3,price): return m1[i] and m2[i] and m3[i] and m1[i]>m2[i]>m3[i] and price>=m3[i]
-def in_downtrend(i,m1,m2,m3,price): return m1[i] and m2[i] and m3[i] and m1[i]<m2[i]<m3[i] and price<=m3[i]
-def broke_ma3_recently(candles, ma3, idx, look=6):
-    for k in range(max(1,idx-look),idx+1):
+def in_uptrend(i,m1,m2,m3,price): return m1[i] and m2[i] and m3[i] and m1[i]>m2[i]>m3[i] and price>m1[i]
+def in_downtrend(i,m1,m2,m3,price): return m1[i] and m2[i] and m3[i] and m1[i]<m2[i]<m3[i] and price<m1[i]
+def broke_ma3_recently(candles,ma3,idx,look=6):
+    for k in range(max(0,idx-look),idx+1):
         if ma3[k] and ma3[k-1]:
-            if candles[k-1]["close"]<=ma3[k-1] and candles[k]["close"]>ma3[k]: return "UP"
-            if candles[k-1]["close"]>=ma3[k-1] and candles[k]["close"]<ma3[k]: return "DOWN"
-    return None
+            if candles[k]["close"]>ma3[k] and candles[k-1]["close"]<=ma3[k-1]: return True
+            if candles[k]["close"]<ma3[k] and candles[k-1]["close"]>=ma3[k-1]: return True
+    return False
 
-# Near logic
-def near_buy(l,m,r): return m and (l<=m or (m-l)<=NEAR_FACTOR*r)
-def near_sell(h,m,r): return m and (h>=m or (m-h)<=NEAR_FACTOR*r)
+# NEW Detection logic
+def detect(candles, tf, sym):
+    n = len(candles)
+    if n < 30: return None
+    i = n - 1
+    prev = candles[i - 1] if i > 0 else None
+    c = candles[i]
+
+    ma1, ma2, ma3 = compute_mas(candles)
+    reasons, side = [], None
+    rej = candle_family(c, prev)
+
+    # 1. Break MA3 + retest + rejection
+    if rej != "NONE" and broke_ma3_recently(candles, ma3, i):
+        if (abs(c["close"] - ma1[i]) < NEAR_FACTOR * (c["high"] - c["low"])) or \
+           (abs(c["close"] - ma2[i]) < NEAR_FACTOR * (c["high"] - c["low"])):
+            side = "BUY" if c["close"] > ma3[i] else "SELL"
+            reasons.append(f"{rej} MA3 breakout+retest")
+
+    # 2. Retest MA1/MA2 in clear trend
+    if rej != "NONE":
+        if in_uptrend(i, ma1, ma2, ma3, c["close"]):
+            if abs(c["close"] - ma1[i]) < NEAR_FACTOR * (c["high"] - c["low"]):
+                side = "BUY"; reasons.append(f"{rej} near MA1 in uptrend")
+            if abs(c["close"] - ma2[i]) < NEAR_FACTOR * (c["high"] - c["low"]):
+                side = "BUY"; reasons.append(f"{rej} near MA2 in uptrend")
+        if in_downtrend(i, ma1, ma2, ma3, c["close"]):
+            if abs(c["close"] - ma1[i]) < NEAR_FACTOR * (c["high"] - c["low"]):
+                side = "SELL"; reasons.append(f"{rej} near MA1 in downtrend")
+            if abs(c["close"] - ma2[i]) < NEAR_FACTOR * (c["high"] - c["low"]):
+                side = "SELL"; reasons.append(f"{rej} near MA2 in downtrend")
+
+    # 3. Tiny swings in trend + rejection
+    if rej != "NONE":
+        rng = c["high"] - c["low"]; body = abs(c["close"] - c["open"])
+        if rng > 0 and body / rng < 0.25:
+            if in_uptrend(i, ma1, ma2, ma3, c["close"]):
+                side = "BUY"; reasons.append(f"{rej} tiny swing uptrend")
+            elif in_downtrend(i, ma1, ma2, ma3, c["close"]):
+                side = "SELL"; reasons.append(f"{rej} tiny swing downtrend")
+
+    if not reasons or not side: return None
+    return {"symbol":sym,"tf":tf,"side":side,"reasons":reasons,"epoch":c["epoch"],"ma1":ma1,"ma2":ma2,"ma3":ma3}
 
 # Fetch
 def fetch_candles(sym, tf, count=CANDLES_N):
@@ -111,46 +138,24 @@ def fetch_candles(sym, tf, count=CANDLES_N):
         try:
             ws=websocket.create_connection(DERIV_WS_URL,timeout=18)
             ws.send(json.dumps({"authorize":DERIV_API_KEY})); ws.recv()
-            ws.send(json.dumps({"ticks_history":sym,"style":"candles","granularity":tf,"count":count,"end":"latest"}))
+            ws.send(json.dumps({"ticks_history":sym,"style":"candles","granularity":tf,"count":count}))
             resp=json.loads(ws.recv()); ws.close()
-            if "candles" in resp:
-                return [{"epoch":int(c["epoch"]),"open":float(c["open"]),"high":float(c["high"]),
-                         "low":float(c["low"]),"close":float(c["close"])} for c in resp["candles"]]
+            if "candles" in resp: return resp["candles"]
         except: time.sleep(1)
     return []
 
 # Chart
 def make_chart(candles,ma1,ma2,ma3,i,reasons,sym,tf):
     n=len(candles); start=max(0,n-LAST_N_CHART); ch=candles[start:]
-    xs=[datetime.fromtimestamp(c["epoch"],tz=timezone.utc) for c in ch]
+    xs=[datetime.fromtimestamp(c["epoch"]).strftime("%H:%M") for c in ch]
     fig,ax=plt.subplots(figsize=(10,6))
     for j,c in enumerate(ch):
         o,h,l,cl=c["open"],c["high"],c["low"],c["close"]; col="g" if cl>=o else "r"
-        ax.plot([j,j],[l,h],c="k",lw=0.6)
-        ax.add_patch(Rectangle((j-CANDLE_WIDTH/2,min(o,cl)),CANDLE_WIDTH,max(1e-9,abs(cl-o)),fc=col,ec="k",lw=0.3))
-    def plot_ma(vals,label,col): ax.plot(range(len(ch)),[vals[k] if k<len(vals) else None for k in range(start,n)],c=col,lw=1,label=label)
-    plot_ma(ma1,"MA1", "b"); plot_ma(ma2,"MA2","orange"); plot_ma(ma3,"MA3","red"); ax.legend()
-    idx=i-start; cl=ch[idx]["close"]
-    side="SELL" if any("SELL" in r or "DOWN" in r for r in reasons) else "BUY"
-    ax.scatter([idx],[cl],c=("red" if side=="SELL" else "green"),marker=("v" if side=="SELL" else "^"),s=120)
-    tmp=tempfile.NamedTemporaryFile(delete=False,suffix=".png"); plt.savefig(tmp.name); plt.close(); return tmp.name
-
-# Detection
-def detect(candles,tf,sym):
-    n=len(candles); i=n-1; prev=candles[i-1] if i>0 else None; c=candles[i]
-    fam=candle_family(c,prev); 
-    if fam=="NONE": return None
-    l,h,cl=c["low"],c["high"],c["close"]; rng=h-l or 1e-9
-    ma1,ma2,ma3=compute_mas(candles); reasons=[]; side=None
-    if near_buy(l,ma1[i],rng) or near_buy(l,ma2[i],rng): reasons.append(f"{fam} near MA1/MA2"); side="BUY"
-    if near_sell(h,ma1[i],rng) or near_sell(h,ma2[i],rng): reasons.append(f"{fam} near MA1/MA2"); side="SELL"
-    cross=broke_ma3_recently(candles,ma3,i)
-    if cross=="UP" and (near_buy(l,ma1[i],rng) or near_buy(l,ma2[i],rng)): reasons.append("MA3 breakout+retest"); side="BUY"
-    if cross=="DOWN" and (near_sell(h,ma1[i],rng) or near_sell(h,ma2[i],rng)): reasons.append("MA3 breakout+retest"); side="SELL"
-    if in_uptrend(i,ma1,ma2,ma3,cl) and (near_buy(l,ma1[i],rng) or near_buy(l,ma2[i],rng)): reasons.append("Continuation up"); side="BUY"
-    if in_downtrend(i,ma1,ma2,ma3,cl) and (near_sell(h,ma1[i],rng) or near_sell(h,ma2[i],rng)): reasons.append("Continuation down"); side="SELL"
-    if side: return {"symbol":sym,"tf":tf,"side":side,"reasons":reasons,"idx":i,"ma1":ma1,"ma2":ma2,"ma3":ma3,"candles":candles}
-    return None
+        ax.plot([j,j],[l,h],c=col,lw=0.6); ax.add_patch(Rectangle((j-CANDLE_WIDTH/2,min(o,cl)),CANDLE_WIDTH,abs(cl-o),facecolor=col,edgecolor=col))
+    ax.plot(ma1[start:],label="MA1"); ax.plot(ma2[start:],label="MA2"); ax.plot(ma3[start:],label="MA3")
+    if reasons: ax.scatter(len(ch)-1,ch[-1]["close"],marker="^" if "BUY" in reasons[0] else "v",color="orange",s=120)
+    ax.legend(); plt.title(sym+" "+str(tf))
+    fn=os.path.join(TMPDIR,f"{sym}_{tf}.png"); plt.savefig(fn); plt.close(); return fn
 
 # Runner
 def run_once():
@@ -160,10 +165,10 @@ def run_once():
             if len(candles)<60: continue
             res=detect(candles,tf,sym)
             if not res: continue
-            i=res["idx"]; epoch=candles[i]["epoch"]; side=res["side"]
+            ires=res; epoch=candles[-1]["epoch"]; side=ires["side"]
             if already_sent(sym,tf,epoch,side): continue
-            caption=f"[{sym} {tf//60}m {side}] {' | '.join(res['reasons'])} @ {candles[i]['close']}"
-            chart=make_chart(res["candles"],res["ma1"],res["ma2"],res["ma3"],i,res["reasons"],sym,tf)
+            caption=f"[{sym} {tf//60}m {side}] " + " | ".join(ires["reasons"]) + f" @ {candles[-1]['close']}"
+            chart=make_chart(candles,ires["ma1"],ires["ma2"],ires["ma3"],len(candles)-1,ires["reasons"],sym,tf)
             send_telegram_photo(TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,caption,chart)
             mark_sent(sym,tf,epoch,side)
 
