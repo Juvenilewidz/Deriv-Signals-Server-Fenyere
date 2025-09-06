@@ -64,18 +64,28 @@ def compute_mas(candles):
     return ma1,ma2,ma3
 
 # Candle families (rejections)
-def candle_family(c, prev):
-    h,l,cl,op=c["high"],c["low"],c["close"],c["open"]
-    body=abs(cl-op); rng=h-l
-    if rng==0: return "NONE"
-    if body<=0.35*rng: return "DOJI"
-    if op<cl and cl>h-0.45*rng: return "PIN_HIGH"
-    if cl<op and cl<l+0.45*rng: return "PIN_LOW"
+def candle_family(candle, prev=None):
+    o,h,l,c = candle["open"], candle["high"], candle["low"], candle["close"]
+    body = abs(c-o)
+    rng = max(1e-9,h-l)
+    upper = h - max(o,c)
+    lower = min(o,c) - l
+
+    # Generous rules (inclusive, not strict)
+    if body <= 0.45 * rng:
+        return "DOJI"
+    if upper >= body and upper > lower:
+        return "PIN_HIGH"
+    if lower >= body and lower > upper:
+        return "PIN_LOW"
+    if body <= 0.25 * rng:
+        return "TINY"
     if prev:
-        po,pc=prev["open"],prev["close"]
-        if pc<po and cl>op and cl>pc: return "BULL_ENG"
-        if pc>po and cl<op and cl<pc: return "BEAR_ENG"
-    if body<=0.08*rng: return "TINY"
+        po,pc = prev["open"], prev["close"]
+        if pc < po and c > o and o <= pc and c >= po:
+            return "BULL_ENG"
+        if pc > po and c < o and o >= pc and c <= po:
+            return "BEAR_ENG"
     return "NONE"
 
 # Trend helpers
