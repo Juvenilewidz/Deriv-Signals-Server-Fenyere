@@ -64,29 +64,64 @@ def compute_mas(candles):
     return ma1,ma2,ma3
 
 # Candle families (rejections)
-def candle_family(candle, prev=None):
-    o,h,l,c = candle["open"], candle["high"], candle["low"], candle["close"]
-    body = abs(c-o)
-    rng = max(1e-9,h-l)
-    upper = h - max(o,c)
-    lower = min(o,c) - l
+def detect(candles, tf, sym):
+    n = len(candles)
+    if n < 30:
+        return None
+    i = n - 1
+    prev = candles[i - 1] if i > 0 else None
+    c = candles[i]
 
-    # Generous rules (inclusive, not strict)
-    if body <= 0.45 * rng:
-        return "DOJI"
-    if upper >= body and upper > lower:
-        return "PIN_HIGH"
-    if lower >= body and lower > upper:
-        return "PIN_LOW"
-    if body <= 0.25 * rng:
-        return "TINY"
-    if prev:
-        po,pc = prev["open"], prev["close"]
-        if pc < po and c > o and o <= pc and c >= po:
-            return "BULL_ENG"
-        if pc > po and c < o and o >= pc and c <= po:
-            return "BEAR_ENG"
-    return "NONE"
+    # compute MAs
+    ma1, ma2, ma3 = compute_mas(candles)
+    reasons = []
+    side = None
+
+    # classify current candle
+    rej = candle_family(c, prev)
+
+    # rule 1: Break MA3 + retest + rejection candlestick → reversal
+    if rej != "NONE" and broke_ma3_recently(candles, ma3, i):
+        if c["close"] > ma3[i]:
+            side = "BUY"
+            reasons.append(f"{rej} after MA3 breakout + retest")
+        elif c["close"] < ma3[i]:
+            side = "SELL"
+            reasons.append(f"{rej} after MA3 breakout + retest")
+
+    # rule 2: Retest MA1/MA2 in a clear trend
+    if rej != "NONE":
+        if in_uptrend(i, ma1, ma2, ma3, c["close"]):
+            if near_ma(c, ma1[i]) or near_ma(c, ma2[i]):
+                side = "BUY"
+                reasons.append(f"{rej} retest MA1/MA2 in uptrend")
+        if in_downtrend(i, ma1, ma2, ma3, c["close"]):
+            if near_ma(c, ma1[i]) or near_ma(c, ma2[i]):
+                side = "SELL"
+                reasons.append(f"{rej} retest MA1/MA2 in downtrend")
+
+    # rule 3: Small swings in clear trend + rejection
+    if rej != "NONE":
+        if in_uptrend(i, ma1, ma2, ma3, c["close"]):
+            side = "BUY"
+            reasons.append(f"{rej} small swing in uptrend")
+        if in_downtrend(i, ma1, ma2, ma3, c["close"]):
+            side = "SELL"
+            reasons.append(f"{rej} small swing in downtrend")
+
+    if not reasons or not side:
+        return None
+
+    return {
+        "symbol": sym,
+        "tf": tf,
+        "side": side,
+        "reasons": reasons,
+        "epoch": c["epoch"],
+        "ma1": ma1,
+        "ma2": ma2,
+        "ma3": ma3,
+    }
 
 # Trend helpers
 def in_uptrend(i,m1,m2,m3,price): return m1[i] and m2[i] and m3[i] and m1[i]>m2[i]>m3[i] and price>m1[i]
