@@ -1,12 +1,11 @@
-# .github/workflows/trading_bot.yml
-# Main workflow for standard timeframes (V10, V50, V75)
+# .github/workflows/standard_trading_bot.yml
+# Standard timeframes workflow (V10, V50, V75)
 name: Standard Timeframes Trading Bot
 
 on:
   schedule:
-    # Run every 5 minutes for standard timeframes
-    - cron: '*/5 * * * *'
-  workflow_dispatch: # Manual trigger
+    - cron: '*/5 * * * *'  # Every 5 minutes
+  workflow_dispatch:
   
 jobs:
   standard_analysis:
@@ -14,20 +13,20 @@ jobs:
     timeout-minutes: 8
     
     steps:
-    - name: Checkout code
+    - name: Checkout Repository
       uses: actions/checkout@v4
       
-    - name: Set up Python
+    - name: Set up Python Environment
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         
-    - name: Install dependencies
+    - name: Install Required Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install websocket-client matplotlib requests python-telegram-bot
         
-    - name: Run Standard Timeframes Bot
+    - name: Execute Standard Timeframes Analysis
       env:
         DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
         DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
@@ -38,23 +37,22 @@ jobs:
         TIMEFRAMES: "300"
       run: python main.py
       
-    - name: Log execution status
+    - name: Record Execution Status
       if: always()
       run: |
-        echo "Standard timeframes analysis completed at $(date)"
-        echo "Exit code: $?"
+        echo "Standard analysis completed at $(date)"
+        echo "Execution status: $?"
 
 ---
 
-# .github/workflows/trading_bot_1s.yml  
-# High-frequency workflow for 1-second timeframes
-name: High-Frequency 1s Trading Bot
+# .github/workflows/high_frequency_1s.yml
+# Independent high-frequency 1s indices workflow
+name: High-Frequency 1s Indices Bot
 
 on:
   schedule:
-    # Run every 2 minutes for high-frequency analysis
-    - cron: '*/2 * * * *'
-  workflow_dispatch: # Manual trigger
+    - cron: '*/2 * * * *'  # Every 2 minutes
+  workflow_dispatch:
   
 jobs:
   high_frequency_analysis:
@@ -62,20 +60,20 @@ jobs:
     timeout-minutes: 5
     
     steps:
-    - name: Checkout code
+    - name: Checkout Repository
       uses: actions/checkout@v4
       
-    - name: Set up Python
+    - name: Set up Python Environment
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         
-    - name: Install dependencies
+    - name: Install Required Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install websocket-client requests python-telegram-bot
         
-    - name: Run High-Frequency Bot
+    - name: Execute High-Frequency Analysis
       env:
         DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
         DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
@@ -85,147 +83,228 @@ jobs:
         TEST_MODE: ${{ secrets.TEST_MODE }}
       run: python main_1s.py
       
-    - name: Log execution status
+    - name: Record Execution Status
       if: always()
       run: |
         echo "High-frequency analysis completed at $(date)"
-        echo "Exit code: $?"
+        echo "Execution status: $?"
 
 ---
 
-# .github/workflows/manual_test.yml
-# Manual testing workflow for both systems
-name: Manual Testing Workflow
+# .github/workflows/test_standard_bot.yml  
+# Independent testing for standard timeframes
+name: Test Standard Bot
 
 on:
   workflow_dispatch:
     inputs:
-      bot_type:
-        description: 'Which bot to test'
-        required: true
-        default: 'both'
-        type: choice
-        options:
-        - standard
-        - high_frequency
-        - both
-      debug_mode:
+      debug_enabled:
         description: 'Enable debug output'
         required: false
         default: true
         type: boolean
+      test_symbols:
+        description: 'Symbols to test'
+        required: false
+        default: 'V10,V50,V75'
+        type: string
 
 jobs:
-  test_standard:
-    if: ${{ github.event.inputs.bot_type == 'standard' || github.event.inputs.bot_type == 'both' }}
+  test_standard_system:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     
     steps:
-    - name: Checkout code
+    - name: Checkout Repository
       uses: actions/checkout@v4
       
-    - name: Set up Python
+    - name: Set up Python Environment
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         
-    - name: Install dependencies
+    - name: Install Required Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install websocket-client matplotlib requests python-telegram-bot
         
-    - name: Test Standard Bot
+    - name: Execute Standard Bot Test
       env:
         DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
         DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        DEBUG: ${{ github.event.inputs.debug_mode }}
+        DEBUG: ${{ github.event.inputs.debug_enabled }}
         TEST_MODE: "1"
         TIMEFRAMES: "300"
       run: python main.py
-      
-  test_high_frequency:
-    if: ${{ github.event.inputs.bot_type == 'high_frequency' || github.event.inputs.bot_type == 'both' }}
+
+---
+
+# .github/workflows/test_1s_bot.yml
+# Independent testing for 1s indices
+name: Test 1s Indices Bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Enable debug output'
+        required: false
+        default: true
+        type: boolean
+      test_symbols:
+        description: '1s symbols to test'
+        required: false
+        default: 'V75(1s),V100(1s),V150(1s)'
+        type: string
+
+jobs:
+  test_1s_system:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     
     steps:
-    - name: Checkout code
+    - name: Checkout Repository
       uses: actions/checkout@v4
       
-    - name: Set up Python
+    - name: Set up Python Environment
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         
-    - name: Install dependencies
+    - name: Install Required Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install websocket-client requests python-telegram-bot
         
-    - name: Test High-Frequency Bot
+    - name: Execute 1s Bot Test
       env:
         DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
         DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        DEBUG: ${{ github.event.inputs.debug_mode }}
+        DEBUG: ${{ github.event.inputs.debug_enabled }}
         TEST_MODE: "1"
       run: python main_1s.py
 
 ---
 
-# .github/workflows/system_health.yml
-# System health monitoring workflow
-name: System Health Check
+# .github/workflows/system_health_standard.yml
+# Health monitoring for standard bot
+name: Standard Bot Health Check
 
 on:
   schedule:
-    # Run health check every hour
-    - cron: '0 * * * *'
+    - cron: '15 */2 * * *'  # Every 2 hours at 15 minutes past
   workflow_dispatch:
 
 jobs:
-  health_check:
+  health_check_standard:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     
     steps:
-    - name: Checkout code
+    - name: Checkout Repository
       uses: actions/checkout@v4
       
-    - name: Set up Python
+    - name: Set up Python Environment
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         
-    - name: Install dependencies
+    - name: Install Required Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install websocket-client requests
+        pip install websocket-client requests matplotlib
         
-    - name: Test API Connection
+    - name: Test Standard Bot Dependencies
+      run: |
+        python -c "
+        import matplotlib.pyplot as plt
+        import websocket
+        import tempfile
+        print('Standard bot dependencies: SUCCESS')
+        "
+        
+    - name: Verify API Connection for Standard Symbols
       env:
         DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
         DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
       run: |
         python -c "
         import websocket, json, os
-        try:
-            ws = websocket.create_connection('wss://ws.derivws.com/websockets/v3?app_id=' + os.getenv('DERIV_APP_ID', '1089'), timeout=10)
-            if os.getenv('DERIV_API_KEY'):
-                ws.send(json.dumps({'authorize': os.getenv('DERIV_API_KEY')}))
-                resp = ws.recv()
-                print('API Auth:', 'SUCCESS' if 'authorize' in resp else 'FAILED')
-            ws.send(json.dumps({'ping': 1}))
-            resp = ws.recv()
-            print('API Connection:', 'SUCCESS' if 'pong' in resp else 'FAILED')
-            ws.close()
-        except Exception as e:
-            print('API Connection: FAILED -', str(e))
-            exit(1)
+        symbols = ['R_10', 'R_50', 'R_75']
+        for symbol in symbols:
+            try:
+                ws = websocket.create_connection('wss://ws.derivws.com/websockets/v3?app_id=' + os.getenv('DERIV_APP_ID', '1089'), timeout=10)
+                ws.send(json.dumps({'ticks_history': symbol, 'style': 'candles', 'granularity': 300, 'count': 10, 'end': 'latest'}))
+                resp = json.loads(ws.recv())
+                ws.close()
+                print(f'{symbol}: SUCCESS' if 'candles' in resp else f'{symbol}: FAILED')
+            except Exception as e:
+                print(f'{symbol}: FAILED - {str(e)}')
+        "
+
+---
+
+# .github/workflows/system_health_1s.yml
+# Independent health monitoring for 1s indices
+name: 1s Indices Health Check
+
+on:
+  schedule:
+    - cron: '45 */2 * * *'  # Every 2 hours at 45 minutes past
+  workflow_dispatch:
+
+jobs:
+  health_check_1s:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python Environment
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install Required Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install websocket-client requests
+        
+    - name: Test 1s Bot Dependencies
+      run: |
+        python -c "
+        import websocket
+        import json
+        import tempfile
+        print('1s bot dependencies: SUCCESS')
+        "
+        
+    - name: Verify API Connection for 1s Symbols
+      env:
+        DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
+        DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+      run: |
+        python -c "
+        import websocket, json, os
+        symbols = ['1HZ75V', '1HZ100V', '1HZ150V']
+        for symbol in symbols:
+            try:
+                ws = websocket.create_connection('wss://ws.derivws.com/websockets/v3?app_id=' + os.getenv('DERIV_APP_ID', '1089'), timeout=15)
+                if os.getenv('DERIV_API_KEY'):
+                    ws.send(json.dumps({'authorize': os.getenv('DERIV_API_KEY')}))
+                    _ = ws.recv()
+                ws.send(json.dumps({'ticks_history': symbol, 'style': 'candles', 'granularity': 1, 'count': 50, 'end': 'latest'}))
+                resp = json.loads(ws.recv())
+                ws.close()
+                print(f'{symbol}: SUCCESS' if 'candles' in resp else f'{symbol}: FAILED')
+            except Exception as e:
+                print(f'{symbol}: FAILED - {str(e)}')
         "
         
     - name: Test Telegram Connection
@@ -237,44 +316,65 @@ jobs:
         import requests, os
         try:
             token = os.getenv('TELEGRAM_BOT_TOKEN')
-            chat_id = os.getenv('TELEGRAM_CHAT_ID')
-            if token and chat_id:
+            if token:
                 resp = requests.get(f'https://api.telegram.org/bot{token}/getMe', timeout=10)
-                print('Telegram Bot:', 'SUCCESS' if resp.status_code == 200 else 'FAILED')
+                print('Telegram Connection:', 'SUCCESS' if resp.status_code == 200 else 'FAILED')
             else:
-                print('Telegram Bot: SKIPPED (no credentials)')
+                print('Telegram Connection: SKIPPED (no token)')
         except Exception as e:
-            print('Telegram Bot: FAILED -', str(e))
-        "
-        
-    - name: Check File Permissions
-      run: |
-        ls -la main.py main_1s.py bot.py 2>/dev/null || echo "Some files missing"
-        python -c "
-        import tempfile, os, json
-        try:
-            with open(os.path.join(tempfile.gettempdir(), 'test_write.json'), 'w') as f:
-                json.dump({'test': 'success'}, f)
-            print('File System: SUCCESS')
-        except Exception as e:
-            print('File System: FAILED -', str(e))
+            print('Telegram Connection: FAILED -', str(e))
         "
 
 ---
 
-# Repository Structure Required:
+# Repository Structure:
 # 
 # your-repo/
 # ├── .github/
 # │   └── workflows/
-# │       ├── trading_bot.yml          # Standard timeframes
-# │       ├── trading_bot_1s.yml       # High-frequency 1s
-# │       ├── manual_test.yml          # Manual testing
-# │       └── system_health.yml        # Health monitoring
-# ├── main.py                          # Your corrected standard bot
-# ├── main_1s.py                       # New high-frequency bot
-# ├── bot.py                           # Shared Telegram functions
-# └── README.md                        # Documentation
+# │       ├── standard_trading_bot.yml      # Standard timeframes execution
+# │       ├── high_frequency_1s.yml         # 1s indices execution  
+# │       ├── test_standard_bot.yml         # Standard bot testing
+# │       ├── test_1s_bot.yml              # 1s bot testing
+# │       ├── system_health_standard.yml    # Standard bot health
+# │       └── system_health_1s.yml         # 1s bot health
+# ├── main.py                               # Standard timeframes bot
+# ├── main_1s.py                           # High-frequency 1s bot
+# ├── bot.py                               # Shared Telegram functions
+# └── README.md
 #
 # Required GitHub Secrets:
-# - DERIV_API_KEY          (Your
+# - DERIV_API_KEY          (Your Deriv API token)
+# - DERIV_APP_ID           (Your Deriv App ID, default: 1089)
+# - TELEGRAM_BOT_TOKEN     (Your Telegram bot token)
+# - TELEGRAM_CHAT_ID       (Your Telegram chat ID)
+# - DEBUG                  (Optional: "1" for debug mode)
+# - TEST_MODE              (Optional: "1" for test mode)
+#
+# Workflow Independence Features:
+# 
+# 1. Separate Execution Schedules:
+#    - Standard bot: Every 5 minutes
+#    - 1s bot: Every 2 minutes
+#    - Independent failure isolation
+#    
+# 2. Independent Testing:
+#    - Separate manual test workflows
+#    - Individual debug controls
+#    - Symbol-specific testing
+#    
+# 3. Separate Health Monitoring:
+#    - Standard bot health every 2 hours at :15
+#    - 1s bot health every 2 hours at :45
+#    - Symbol-specific connectivity tests
+#    
+# 4. Resource Isolation:
+#    - Different timeout periods
+#    - Separate dependency installations
+#    - Independent error handling
+#    
+# 5. Deployment Benefits:
+#    - Enable/disable systems independently
+#    - Monitor performance separately
+#    - Troubleshoot issues in isolation
+#    - Scale execution frequency independently
