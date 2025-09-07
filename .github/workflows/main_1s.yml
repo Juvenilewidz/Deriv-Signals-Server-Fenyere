@@ -1,0 +1,280 @@
+# .github/workflows/trading_bot.yml
+# Main workflow for standard timeframes (V10, V50, V75)
+name: Standard Timeframes Trading Bot
+
+on:
+  schedule:
+    # Run every 5 minutes for standard timeframes
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Manual trigger
+  
+jobs:
+  standard_analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install websocket-client matplotlib requests python-telegram-bot
+        
+    - name: Run Standard Timeframes Bot
+      env:
+        DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
+        DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        DEBUG: ${{ secrets.DEBUG }}
+        TEST_MODE: ${{ secrets.TEST_MODE }}
+        TIMEFRAMES: "300"
+      run: python main.py
+      
+    - name: Log execution status
+      if: always()
+      run: |
+        echo "Standard timeframes analysis completed at $(date)"
+        echo "Exit code: $?"
+
+---
+
+# .github/workflows/trading_bot_1s.yml  
+# High-frequency workflow for 1-second timeframes
+name: High-Frequency 1s Trading Bot
+
+on:
+  schedule:
+    # Run every 2 minutes for high-frequency analysis
+    - cron: '*/2 * * * *'
+  workflow_dispatch: # Manual trigger
+  
+jobs:
+  high_frequency_analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install websocket-client requests python-telegram-bot
+        
+    - name: Run High-Frequency Bot
+      env:
+        DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
+        DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        DEBUG: ${{ secrets.DEBUG }}
+        TEST_MODE: ${{ secrets.TEST_MODE }}
+      run: python main_1s.py
+      
+    - name: Log execution status
+      if: always()
+      run: |
+        echo "High-frequency analysis completed at $(date)"
+        echo "Exit code: $?"
+
+---
+
+# .github/workflows/manual_test.yml
+# Manual testing workflow for both systems
+name: Manual Testing Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      bot_type:
+        description: 'Which bot to test'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+        - standard
+        - high_frequency
+        - both
+      debug_mode:
+        description: 'Enable debug output'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  test_standard:
+    if: ${{ github.event.inputs.bot_type == 'standard' || github.event.inputs.bot_type == 'both' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install websocket-client matplotlib requests python-telegram-bot
+        
+    - name: Test Standard Bot
+      env:
+        DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
+        DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        DEBUG: ${{ github.event.inputs.debug_mode }}
+        TEST_MODE: "1"
+        TIMEFRAMES: "300"
+      run: python main.py
+      
+  test_high_frequency:
+    if: ${{ github.event.inputs.bot_type == 'high_frequency' || github.event.inputs.bot_type == 'both' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install websocket-client requests python-telegram-bot
+        
+    - name: Test High-Frequency Bot
+      env:
+        DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
+        DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        DEBUG: ${{ github.event.inputs.debug_mode }}
+        TEST_MODE: "1"
+      run: python main_1s.py
+
+---
+
+# .github/workflows/system_health.yml
+# System health monitoring workflow
+name: System Health Check
+
+on:
+  schedule:
+    # Run health check every hour
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health_check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install websocket-client requests
+        
+    - name: Test API Connection
+      env:
+        DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
+        DERIV_APP_ID: ${{ secrets.DERIV_APP_ID }}
+      run: |
+        python -c "
+        import websocket, json, os
+        try:
+            ws = websocket.create_connection('wss://ws.derivws.com/websockets/v3?app_id=' + os.getenv('DERIV_APP_ID', '1089'), timeout=10)
+            if os.getenv('DERIV_API_KEY'):
+                ws.send(json.dumps({'authorize': os.getenv('DERIV_API_KEY')}))
+                resp = ws.recv()
+                print('API Auth:', 'SUCCESS' if 'authorize' in resp else 'FAILED')
+            ws.send(json.dumps({'ping': 1}))
+            resp = ws.recv()
+            print('API Connection:', 'SUCCESS' if 'pong' in resp else 'FAILED')
+            ws.close()
+        except Exception as e:
+            print('API Connection: FAILED -', str(e))
+            exit(1)
+        "
+        
+    - name: Test Telegram Connection
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python -c "
+        import requests, os
+        try:
+            token = os.getenv('TELEGRAM_BOT_TOKEN')
+            chat_id = os.getenv('TELEGRAM_CHAT_ID')
+            if token and chat_id:
+                resp = requests.get(f'https://api.telegram.org/bot{token}/getMe', timeout=10)
+                print('Telegram Bot:', 'SUCCESS' if resp.status_code == 200 else 'FAILED')
+            else:
+                print('Telegram Bot: SKIPPED (no credentials)')
+        except Exception as e:
+            print('Telegram Bot: FAILED -', str(e))
+        "
+        
+    - name: Check File Permissions
+      run: |
+        ls -la main.py main_1s.py bot.py 2>/dev/null || echo "Some files missing"
+        python -c "
+        import tempfile, os, json
+        try:
+            with open(os.path.join(tempfile.gettempdir(), 'test_write.json'), 'w') as f:
+                json.dump({'test': 'success'}, f)
+            print('File System: SUCCESS')
+        except Exception as e:
+            print('File System: FAILED -', str(e))
+        "
+
+---
+
+# Repository Structure Required:
+# 
+# your-repo/
+# ├── .github/
+# │   └── workflows/
+# │       ├── trading_bot.yml          # Standard timeframes
+# │       ├── trading_bot_1s.yml       # High-frequency 1s
+# │       ├── manual_test.yml          # Manual testing
+# │       └── system_health.yml        # Health monitoring
+# ├── main.py                          # Your corrected standard bot
+# ├── main_1s.py                       # New high-frequency bot
+# ├── bot.py                           # Shared Telegram functions
+# └── README.md                        # Documentation
+#
+# Required GitHub Secrets:
+# - DERIV_API_KEY          (Your
