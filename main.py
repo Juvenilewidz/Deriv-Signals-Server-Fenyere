@@ -42,7 +42,7 @@ DERIV_WS_URL  = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID","").strip()
 
-ASSETS = [s.strip() for s in os.getenv("ASSETS","R_10, R_50, R_75, 1HZ75V, 1HZ100V, 1HZ150V").split(",") if s.strip()]
+ASSETS = [s.strip() for s in os.getenv("ASSETS", "R_10, R_50, R_75, 1HZ75V, 1HZ100V, 1HZ150V").split(",") if s.strip()]
 TIMEFRAMES = [int(x) for x in os.getenv("TIMEFRAMES","300").split(",")]  # default 5m
 
 CANDLES_N = 180; LAST_N_CHART = 180; CANDLE_WIDTH = 0.35
