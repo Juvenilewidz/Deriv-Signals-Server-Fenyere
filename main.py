@@ -32,7 +32,7 @@ TIMEFRAMES = [int(x) for x in os.getenv("TIMEFRAMES","300").split(",") if x.stri
 DEBUG = os.getenv("DEBUG","0") == "1"
 TEST_MODE = os.getenv("TEST_MODE","0") == "1"
 
-CANDLES_N = 200
+CANDLES_N = 400
 TMPDIR = tempfile.gettempdir()
 ALERT_FILE = os.path.join(TMPDIR, "dsr_last_sent_main.json")
 
