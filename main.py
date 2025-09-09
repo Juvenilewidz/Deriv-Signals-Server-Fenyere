@@ -26,7 +26,7 @@ TMPDIR = tempfile.gettempdir()
 ALERT_FILE = os.path.join(TMPDIR, "dsr_last_sent_main.json")
 
 # SIMPLE PARAMETERS
-MA3_LOOKBACK = 20      # Look for MA3 break in last 20 candles
+MA3_LOOKBACK = 5     # Look for MA3 break in last 20 candles
 RETEST_DISTANCE = 0.005  # 0.5% distance for MA retest detection
 
 SYMBOL_MAP = {
