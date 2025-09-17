@@ -54,7 +54,8 @@ SYMBOL_MAP = {
     "V75": "R_75",
     "Jump10": "JD10",
     "Jump25": "JD25",
-    "Jump50": "JD50", 
+    "Jump50": "JD50",
+    "Jump75": "JD75",
     "Jump100": "JD100",
     # CORRECTED 1s indices symbols from Deriv API
     "V75(1s)": "1s_V75",     # Fixed from R_1HZ75V
