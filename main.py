@@ -56,12 +56,9 @@ SYMBOL_MAP = {
     "Jump10": "JD10",
     "Jump25": "JD25",
     "Jump50": "JD50", 
+    "Jump75": "JD75",
     "Jump100": "JD100",
-    # CORRECTED 1s indices symbols from Deriv API
-    "V75(1s)": "1HZ75V",     # Fixed back to original working format
-    "V100(1s)": "1HZ100V",   # Fixed back to original working format  
-    "V150(1s)": "1HZ150V",   # Fixed back to original working format
-    "V15(1s)": "1HZ15V"      # Fixed back to original working format
+    # Fixed back to original working format
 }
 
 SYMBOL_TF_MAP = {
