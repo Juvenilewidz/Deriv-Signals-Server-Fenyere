@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-main.py — Dynamic Support & Resistance Trading Bot (Strict DSR Version)
+main.py — Dynamic Support & Resistance Trading Bot
 
-DSR Strategy (Trend-following):
-- Signals ONLY on confirmed rejection candlestick at MA1 or MA2
-- Rejection wick requirements:
-    - Wick >= 1.5 × candle body
-    - Wick >= 60% of full candle range
-- NO numeric tolerance thresholds (must touch MA1/MA2)
-- Plots all MAs (MA1, MA2, MA3)
+Recrafted for strict adherence to DSR strategy rules and logic as described in images 1-14:
+- Signal only in clear trends (no ranging/consolidation/sideways)
+- Strict MA arrangement: bullish (MA1 > MA2 > MA3), bearish (MA1 < MA2 < MA3)
+- Signal only on confirmed rejection candlestick patterns (Pin Bar, Doji, Engulfing) at MA1/MA2
+- Confirmation candle required after rejection, and signals only at close of confirmation
+- No signals after price spike, or when price is between MA1 and MA2
+- No signals during consolidation (frequent MA2 touches, packed/intersecting MAs)
 """
 
 import os, json, time, tempfile, traceback
-from datetime import datetime, timezone
+from datetime import datetime
 import websocket, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -96,18 +96,18 @@ def mark_sent(shorthand, tf, epoch, side):
 # -------------------------
 # Moving Averages
 # -------------------------
-def smma_correct(series, period):
+def smma(series, period):
     n = len(series)
     if n < period:
         return [None] * n
     result = [None] * (period - 1)
-    first_sma = sum(series[:period]) / period
-    result.append(first_sma)
-    prev_smma = first_sma
+    sma = sum(series[:period]) / period
+    result.append(sma)
+    prev = sma
     for i in range(period, n):
-        current_smma = (prev_smma * (period - 1) + series[i]) / period
-        result.append(current_smma)
-        prev_smma = current_smma
+        smma = (prev * (period - 1) + series[i]) / period
+        result.append(smma)
+        prev = smma
     return result
 
 def sma(series, period):
@@ -125,73 +125,98 @@ def sma(series, period):
 def compute_mas(candles):
     closes = [c["close"] for c in candles]
     hlc3 = [(c["high"] + c["low"] + c["close"]) / 3.0 for c in candles]
-    ma1 = smma_correct(hlc3, 9)
-    ma2 = smma_correct(closes, 19)
+    ma1 = smma(hlc3, 9)
+    ma2 = smma(closes, 19)
     ma2_valid = [v for v in ma2 if v is not None]
-    if len(ma2_valid) >= 25:
-        ma3_calc = sma(ma2_valid, 25)
-        ma3 = []
-        valid_idx = 0
-        for v in ma2:
-            if v is None:
-                ma3.append(None)
-            else:
-                if valid_idx < len(ma3_calc):
-                    ma3.append(ma3_calc[valid_idx])
-                else:
-                    ma3.append(None)
-                valid_idx += 1
-    else:
-        ma3 = [None] * len(candles)
-    return ma1, ma2, ma3
+    ma3 = sma(ma2_valid, 25) if len(ma2_valid) >= 25 else [None]*len(candles)
+    # Pad ma3 to candles
+    ma3_full = []
+    idx = 0
+    for v in ma2:
+        if v is None: ma3_full.append(None)
+        else:
+            if idx < len(ma3): ma3_full.append(ma3[idx]); idx += 1
+            else: ma3_full.append(None)
+    return ma1, ma2, ma3_full
 
 # -------------------------
-# Strict Rejection Detection
+# Utility Functions
 # -------------------------
-def is_strict_rejection_candle(candle):
-    """
-    Returns (bool, "UPPER_REJECTION"/"LOWER_REJECTION"/"NONE"):
-    - Wick >= 1.5 × body
-    - Wick >= 60% of candle range
-    - Only upper or lower rejection, NOT just interaction
-    """
+def get_ma_arrangement(ma1, ma2, ma3):
+    if not all(v is not None for v in (ma1, ma2, ma3)):
+        return "UNDEFINED"
+    if ma1 > ma2 > ma3:
+        return "BULLISH_ARRANGEMENT"
+    elif ma1 < ma2 < ma3:
+        return "BEARISH_ARRANGEMENT"
+    return "MIXED_ARRANGEMENT"
+
+def is_packed_or_intersecting(ma1_arr, ma2_arr, ma3_arr, idx, lookback=10):
+    # Check if MAs are packed horizontally or frequently intersecting in lookback
+    packed_count, intersect_count = 0, 0
+    for i in range(idx-lookback+1, idx+1):
+        if i <= 0: continue
+        vals = [ma1_arr[i], ma2_arr[i], ma3_arr[i]]
+        if not all(v is not None for v in vals): continue
+        ma1, ma2, ma3 = vals
+        # Packed horizontally: difference < 0.2% of price
+        max_min = max(vals) - min(vals)
+        avg_price = (ma1 + ma2 + ma3)/3
+        if abs(max_min) < avg_price*0.002: packed_count += 1
+        # Intersecting: MAs cross each other
+        if (ma1 > ma2 and ma1 < ma3) or (ma1 < ma2 and ma1 > ma3): intersect_count += 1
+        if (ma2 > ma3 and ma2 < ma1) or (ma2 < ma3 and ma2 > ma1): intersect_count += 1
+    return packed_count > 4 or intersect_count > 4
+
+def check_ranging_market(candles, ma2, idx, lookback=10):
+    # If price touches MA2 (high/low spans across MA2) more than 2 times in lookback = ranging
+    touches = 0
+    for i in range(idx-lookback+1, idx+1):
+        if i < 0 or i >= len(candles): continue
+        c = candles[i]
+        v = ma2[i]
+        if v is None: continue
+        if c["low"] <= v <= c["high"]: touches += 1
+    return touches > 2
+
+def is_price_spike(candles, idx):
+    # A spike is defined by a large vertical move (>2% from previous close)
+    if idx < 2: return False
+    prev_close = candles[idx-1]["close"]
+    this_close = candles[idx]["close"]
+    move = abs(this_close - prev_close) / prev_close
+    return move > 0.02
+
+def rejection_type(candle):
     o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
-    body = abs(c - o)
-    rng = h - l
-    if rng <= 0 or body == 0:
-        return False, "NONE"
-    upper_wick = h - max(o, c)
-    lower_wick = min(o, c) - l
-    # Upper rejection
-    if upper_wick >= 1.5 * body and upper_wick >= 0.6 * rng:
-        return True, "UPPER_REJECTION"
-    # Lower rejection
-    if lower_wick >= 1.5 * body and lower_wick >= 0.6 * rng:
-        return True, "LOWER_REJECTION"
-    return False, "NONE"
+    body = abs(c-o)
+    rng = h-l
+    if rng == 0: return "NONE"
+    wick_upper = h - max(o,c)
+    wick_lower = min(o,c) - l
+    ratio = body / rng if rng > 0 else 0
+    # Pin bar: wick >= 1.2x body and body < 40% of range
+    if wick_upper >= body*1.2 and body < rng*0.4: return "PIN_BAR"
+    if wick_lower >= body*1.2 and body < rng*0.4: return "PIN_BAR"
+    # Doji: body less than 20% of range
+    if body < rng*0.2: return "DOJI"
+    # Engulfing: previous candle body < current body and opposite direction
+    return "ENGULFING"
 
-# -------------------------
-# MA Level Actual Touch
-# -------------------------
-def candle_touches_ma(candle, ma_val):
-    """Returns True if candle's high/low actually crosses MA value"""
-    if ma_val is None:
-        return False
-    return candle["low"] <= ma_val <= candle["high"]
+def near_ma(price, ma, tolerance=0.001):
+    if ma is None: return False
+    return abs(price-ma) <= abs(ma)*tolerance
 
-# -------------------------
-# Data Fetching
-# -------------------------
 def fetch_candles(sym, tf, count=CANDLES_N):
     for attempt in range(3):
         try:
             ws = websocket.create_connection(DERIV_WS_URL, timeout=20)
             if DERIV_API_KEY:
                 ws.send(json.dumps({"authorize": DERIV_API_KEY}))
-                auth_resp = ws.recv()
+                ws.recv()
             request = {
                 "ticks_history": sym,
-                "style": "candles", 
+                "style": "candles",
                 "granularity": tf,
                 "count": count,
                 "end": "latest"
@@ -199,8 +224,6 @@ def fetch_candles(sym, tf, count=CANDLES_N):
             ws.send(json.dumps(request))
             response = json.loads(ws.recv())
             ws.close()
-            if DEBUG:
-                print(f"Fetched {len(response.get('candles', []))} candles for {sym}")
             if "candles" in response and response["candles"]:
                 return [{
                     "epoch": int(c["epoch"]),
@@ -210,81 +233,84 @@ def fetch_candles(sym, tf, count=CANDLES_N):
                     "close": float(c["close"])
                 } for c in response["candles"]]
         except Exception as e:
-            if DEBUG:
-                print(f"Attempt {attempt + 1} failed for {sym}: {e}")
             time.sleep(1)
     return []
 
 # -------------------------
-# Core DSR Signal Detection
+# DSR Signal Detection Strict
 # -------------------------
 def detect_signal(candles, tf, shorthand):
     n = len(candles)
     if n < MIN_CANDLES:
         return None
-    current_idx = n - 1
-    current_candle = candles[current_idx]
+
     ma1, ma2, ma3 = compute_mas(candles)
-    current_ma1 = ma1[current_idx] if current_idx < len(ma1) else None
-    current_ma2 = ma2[current_idx] if current_idx < len(ma2) else None
-    current_ma3 = ma3[current_idx] if current_idx < len(ma3) else None
-    if not all(v is not None for v in [current_ma1, current_ma2, current_ma3]):
+    idx = n-2  # Confirmation candle is after rejection, so check second last
+    current = candles[idx]
+    next_candle = candles[idx+1]
+
+    # --- Trend-only zone ---
+    ma1_val, ma2_val, ma3_val = ma1[idx], ma2[idx], ma3[idx]
+    arrangement = get_ma_arrangement(ma1_val, ma2_val, ma3_val)
+    if arrangement not in {"BULLISH_ARRANGEMENT", "BEARISH_ARRANGEMENT"}:
         return None
-    current_close = current_candle["close"]
-    # Determine bias from MA1/MA2 relationship
-    if current_ma1 > current_ma2:
-        bias = "BUY_BIAS"
-    elif current_ma1 < current_ma2:
-        bias = "SELL_BIAS"
+
+    # --- No signals if packed/intersecting MAs or ranging ---
+    if is_packed_or_intersecting(ma1, ma2, ma3, idx):
+        return None
+    if check_ranging_market(candles, ma2, idx):
+        return None
+
+    # --- No signals after price spike ---
+    if is_price_spike(candles, idx):
+        return None
+
+    # --- Signal must be at MA1 or MA2 level ---
+    at_ma1 = near_ma(current["close"], ma1_val) or near_ma(current["high"], ma1_val) or near_ma(current["low"], ma1_val)
+    at_ma2 = near_ma(current["close"], ma2_val) or near_ma(current["high"], ma2_val) or near_ma(current["low"], ma2_val)
+    if not (at_ma1 or at_ma2):
+        return None
+
+    # --- No signal if price between MA1 and MA2 ---
+    if arrangement == "BULLISH_ARRANGEMENT" and ma2_val < current["close"] < ma1_val:
+        return None
+    if arrangement == "BEARISH_ARRANGEMENT" and ma1_val < current["close"] < ma2_val:
+        return None
+
+    # --- Rejection candle requirements ---
+    pattern = rejection_type(current)
+    if pattern not in {"PIN_BAR", "DOJI", "ENGULFING"}:
+        return None
+
+    # --- Confirmation candle direction ---
+    if arrangement == "BULLISH_ARRANGEMENT":
+        if next_candle["close"] <= next_candle["open"]:  # Not bullish
+            return None
+        side = "BUY"
     else:
-        return None
-    # Confirmed candlestick close only
-    # Wait for candlestick to close, check for strict rejection
-    is_rejection, pattern_type = is_strict_rejection_candle(current_candle)
-    if not is_rejection:
-        return None
-    # Must touch MA1 or MA2 (no tolerance), and show rejection there
-    touched_ma1 = candle_touches_ma(current_candle, current_ma1)
-    touched_ma2 = candle_touches_ma(current_candle, current_ma2)
-    if not (touched_ma1 or touched_ma2):
-        return None
-    # Rejection must occur at MA1 or MA2 (not just interaction)
-    if touched_ma1:
-        ma_level = "MA1"
-        # Confirm rejection direction fits bias
-        if bias == "BUY_BIAS" and pattern_type != "LOWER_REJECTION":
+        if next_candle["close"] >= next_candle["open"]:  # Not bearish
             return None
-        if bias == "SELL_BIAS" and pattern_type != "UPPER_REJECTION":
-            return None
-    elif touched_ma2:
-        ma_level = "MA2"
-        if bias == "BUY_BIAS" and pattern_type != "LOWER_REJECTION":
-            return None
-        if bias == "SELL_BIAS" and pattern_type != "UPPER_REJECTION":
-            return None
-    else:
-        return None
-    # Cooldown to prevent spam
+        side = "SELL"
+
+    # --- Cooldown ---
     last_signal_time = getattr(detect_signal, f'last_signal_{shorthand}', 0)
-    current_time = current_candle["epoch"]
-    if current_time - last_signal_time < 1800:  # 30 minutes
+    current_time = candles[idx+1]["epoch"]
+    if current_time - last_signal_time < 1800:  # 30 min
         return None
     setattr(detect_signal, f'last_signal_{shorthand}', current_time)
-    if DEBUG:
-        print(f"VALID DSR: {bias.replace('_BIAS','')} - {pattern_type} at {ma_level} - Price: {current_close:.2f}, MA1: {current_ma1:.2f}, MA2: {current_ma2:.2f}")
+
     return {
         "symbol": shorthand,
         "tf": tf,
-        "side": "BUY" if bias == "BUY_BIAS" else "SELL",
-        "pattern": pattern_type,
-        "ma_level": ma_level,
-        "ma_arrangement": "BULLISH_ARRANGEMENT" if bias == "BUY_BIAS" else "BEARISH_ARRANGEMENT",
-        "context": f"Confirmed {pattern_type.replace('_',' ').title()} at {ma_level}",
-        "price": current_close,
-        "ma1": current_ma1,
-        "ma2": current_ma2, 
-        "ma3": current_ma3,
-        "idx": current_idx,
+        "side": side,
+        "pattern": pattern,
+        "ma_level": "MA1" if at_ma1 else "MA2",
+        "ma_arrangement": arrangement,
+        "price": current["close"],
+        "ma1": ma1_val,
+        "ma2": ma2_val,
+        "ma3": ma3_val,
+        "idx": idx+1,
         "candles": candles,
         "ma1_array": ma1,
         "ma2_array": ma2,
@@ -292,7 +318,7 @@ def detect_signal(candles, tf, shorthand):
     }
 
 # -------------------------
-# Chart Generation (Plots All MAs)
+# Chart Generation
 # -------------------------
 def create_signal_chart(signal_data):
     candles = signal_data["candles"]
@@ -305,7 +331,6 @@ def create_signal_chart(signal_data):
     fig, ax = plt.subplots(figsize=(14, 10))
     fig.patch.set_facecolor('black')
     ax.set_facecolor('black')
-    # Plot candlesticks
     for i, candle in enumerate(chart_candles):
         o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
         if c >= o:
@@ -324,30 +349,23 @@ def create_signal_chart(signal_data):
             linewidth=1
         ))
         ax.plot([i, i], [l, h], color=edge_color, linewidth=1.2, alpha=0.8)
-    # Plot all MAs
     def plot_ma(ma_values, label, color, linewidth=2):
         chart_ma = []
-        for j in range(chart_start, n):
-            if j < len(ma_values) and ma_values[j] is not None:
-                chart_ma.append(ma_values[j])
+        for i in range(chart_start, n):
+            if i < len(ma_values) and ma_values[i] is not None:
+                chart_ma.append(ma_values[i])
             else:
                 chart_ma.append(None)
-        ax.plot(range(len(chart_candles)), chart_ma, 
-                color=color, linewidth=linewidth, label=label, alpha=0.9)
+        ax.plot(range(len(chart_candles)), chart_ma, color=color, linewidth=linewidth, label=label, alpha=0.9)
     plot_ma(ma1, "MA1 (SMMA HLC3-9)", "#FFFFFF", 2)
     plot_ma(ma2, "MA2 (SMMA Close-19)", "#00BFFF", 2)
     plot_ma(ma3, "MA3 (SMA MA2-25)", "#FF6347", 2)
-    # Mark signal point
     signal_chart_idx = signal_idx - chart_start
     if 0 <= signal_chart_idx < len(chart_candles):
         signal_candle = chart_candles[signal_chart_idx]
         signal_price = signal_candle["close"]
-        if signal_data["side"] == "BUY":
-            marker_color = "#00FF00"
-            marker_symbol = "^"
-        else:
-            marker_color = "#FF0000" 
-            marker_symbol = "v"
+        marker_color = "#00FF00" if signal_data["side"] == "BUY" else "#FF0000"
+        marker_symbol = "^" if signal_data["side"] == "BUY" else "v"
         ax.scatter([signal_chart_idx], [signal_price], 
                   color=marker_color, marker=marker_symbol, 
                   s=300, edgecolor="#FFFFFF", linewidth=3, zorder=10)
@@ -363,12 +381,7 @@ def create_signal_chart(signal_data):
         spine.set_color('white')
     plt.tight_layout()
     chart_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    plt.savefig(chart_file.name, 
-                dpi=150, 
-                bbox_inches="tight", 
-                facecolor='black',
-                edgecolor='none',
-                pad_inches=0.1)
+    plt.savefig(chart_file.name, dpi=150, bbox_inches="tight", facecolor='black',edgecolor='none',pad_inches=0.1)
     plt.close()
     plt.style.use('default')
     return chart_file.name
@@ -384,45 +397,27 @@ def run_analysis():
     for shorthand, deriv_symbol in SYMBOL_MAP.items():
         try:
             tf = get_timeframe_for_symbol(shorthand)
-            if DEBUG:
-                tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
-                print(f"Analyzing {shorthand} on {tf_display}...")
             candles = fetch_candles(deriv_symbol, tf)
-            if len(candles) < MIN_CANDLES:
-                if DEBUG:
-                    print(f"Insufficient candles for {shorthand}: {len(candles)}")
-                continue
+            if len(candles) < MIN_CANDLES: continue
             signal = detect_signal(candles, tf, shorthand)
-            if not signal:
-                continue
+            if not signal: continue
             current_epoch = signal["candles"][signal["idx"]]["epoch"]
-            if already_sent(shorthand, tf, current_epoch, signal["side"]):
-                if DEBUG:
-                    print(f"Signal already sent for {shorthand}")
-                continue
-            tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
+            if already_sent(shorthand, tf, current_epoch, signal["side"]): continue
             arrangement_emoji = "📈" if signal["ma_arrangement"] == "BULLISH_ARRANGEMENT" else "📉"
-            caption = (f"🎯 {signal['symbol']} {tf_display} - {signal['side']} SIGNAL\n"
+            caption = (f"🎯 {signal['symbol']} {tf}s - {signal['side']} SIGNAL\n"
                       f"{arrangement_emoji} MA Setup: {signal['ma_arrangement'].replace('_', ' ')}\n" 
                       f"🎨 Pattern: {signal['pattern']}\n"
                       f"📍 Level: {signal['ma_level']} Dynamic S/R\n"
-                      f"💰 Price: {signal['price']:.5f}\n"
-                      f"📊 Context: {signal['context']}")
+                      f"💰 Price: {signal['price']:.5f}")
             chart_path = create_signal_chart(signal)
             success, msg_id = send_telegram_photo(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, caption, chart_path)
             if success:
                 mark_sent(shorthand, tf, current_epoch, signal["side"])
                 signals_found += 1
-                if DEBUG:
-                    print(f"DSR signal sent for {shorthand}: {signal['side']}")
-            try:
-                os.unlink(chart_path)
-            except:
-                pass
+            try: os.unlink(chart_path)
+            except: pass
         except Exception as e:
-            if DEBUG:
-                print(f"Error analyzing {shorthand}: {e}")
-                traceback.print_exc()
+            if DEBUG: print(f"Error analyzing {shorthand}: {e}")
     if DEBUG:
         print(f"Analysis complete. {signals_found} DSR signals found.")
 
