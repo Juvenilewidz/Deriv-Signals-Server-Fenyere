@@ -62,10 +62,17 @@ SYMBOL_MAP = {
     "Jump50": "JD50", 
     "Jump75": "JD75",
     "Jump100": "JD100",
+    "V75(1s)": "1s_V75",
+    "V100(1s)": "1s_V100",
+    "V150(1s)": "1s_V150",
+    "V15(1s)": "1s_V15"
 }
 
 SYMBOL_TF_MAP = {
     "V75(1s)": 1,
+    "V100(1s)": 1,  
+    "V150(1s)": 1,
+    "V15(1s)": 1
 }
 
 # -------------------------
@@ -527,21 +534,15 @@ def fetch_candles(sym, tf, count=CANDLES_N):
 # -------------------------
 # Enhanced Signal Detection
 # -------------------------
-# -------------------------
-# TIMING FIX: Enhanced Signal Detection with Proper Confirmation
-# -------------------------
 def detect_adaptive_signal(candles, tf, shorthand):
-    """Complete Adaptive DSR Strategy Implementation with PROPER TIMING"""
+    """Complete Adaptive DSR Strategy Implementation"""
     n = len(candles)
-    if n < MIN_CANDLES + 1:  # Need extra candle for proper confirmation
+    if n < MIN_CANDLES:
         return None
     
-    # Look at candles up to n-1 (excluding the very last candle)
-    # This ensures we're only analyzing COMPLETED candles
-    analysis_candles = candles[:-1]  # Exclude current incomplete candle
-    current_candle = analysis_candles[-1]  # Last COMPLETED candle
+    current_candle = candles[-1]
     
-    ma1_list, ma2_list, ma3_list = compute_mas(analysis_candles)
+    ma1_list, ma2_list, ma3_list = compute_mas(candles)
     mas_objects = create_ma_objects(ma1_list, ma2_list, ma3_list)
     
     if not mas_objects or mas_objects[-1] is None:
@@ -550,13 +551,12 @@ def detect_adaptive_signal(candles, tf, shorthand):
     current_ma = mas_objects[-1]
     current_price = current_candle["close"]
     
-    # Step 1-4: Same market condition checks
-    if is_adaptive_ranging_market(mas_objects, analysis_candles):
+    if is_adaptive_ranging_market(mas_objects, candles):
         if DEBUG:
             print(f"{shorthand}: Market is ranging/consolidating - avoiding signals")
         return None
     
-    if detect_adaptive_price_spike(analysis_candles):
+    if detect_adaptive_price_spike(candles):
         if DEBUG:
             print(f"{shorthand}: Price spike detected - avoiding signals")
         return None
@@ -572,31 +572,24 @@ def detect_adaptive_signal(candles, tf, shorthand):
             print(f"{shorthand}: MAs not properly separated")
         return None
     
-    # Step 5: Look for COMPLETED rejection + confirmation sequence
-    if len(analysis_candles) >= 2:
-        # Rejection candle (second to last COMPLETED candle)
-        rejection_candle = analysis_candles[-2]
-        rejection_ma = mas_objects[-2] if len(mas_objects) >= 2 and mas_objects[-2] is not None else mas_objects[-1]
+    if len(candles) >= 2:
+        prev_candle = candles[-2]
+        prev_ma = mas_objects[-2] if len(mas_objects) >= 2 and mas_objects[-2] is not None else mas_objects[-1]
         
-        # Confirmation candle (last COMPLETED candle) 
-        confirmation_candle = analysis_candles[-1]
-        
-        # Check if rejection candle showed rejection at MA
         rejection_found, pattern, ma_level = detect_rejection_at_ma(
-            rejection_candle, rejection_ma, trend, analysis_candles[:-2]
+            prev_candle, prev_ma, trend, candles[:-1]
         )
         
         if rejection_found:
-            # Check if confirmation candle CONFIRMED the signal
             confirmation_valid = False
             
-            if trend == TrendDirection.UPTREND and confirmation_candle["close"] > confirmation_candle["open"]:
+            if trend == TrendDirection.UPTREND and current_candle["close"] > current_candle["open"]:
                 confirmation_valid = True
-            elif trend == TrendDirection.DOWNTREND and confirmation_candle["close"] < confirmation_candle["open"]:
+            elif trend == TrendDirection.DOWNTREND and current_candle["close"] < current_candle["open"]:
                 confirmation_valid = True
             
             if confirmation_valid:
-                confidence = calculate_signal_confidence(trend, pattern, mas_objects, analysis_candles)
+                confidence = calculate_signal_confidence(trend, pattern, mas_objects, candles)
                 signal_side = SignalType.BUY if trend == TrendDirection.UPTREND else SignalType.SELL
                 
                 if DEBUG:
@@ -610,12 +603,12 @@ def detect_adaptive_signal(candles, tf, shorthand):
                     "ma_level": ma_level,
                     "trend": trend.value,
                     "confidence": confidence,
-                    "price": confirmation_candle["close"],  # Use confirmation candle close price
+                    "price": current_price,
                     "ma1": current_ma.ma1,
                     "ma2": current_ma.ma2,
                     "ma3": current_ma.ma3,
-                    "idx": len(analysis_candles) - 1,  # Index of confirmation candle
-                    "candles": analysis_candles,  # Use only completed candles
+                    "idx": n - 1,
+                    "candles": candles,
                     "ma1_array": ma1_list,
                     "ma2_array": ma2_list,
                     "ma3_array": ma3_list
@@ -624,10 +617,10 @@ def detect_adaptive_signal(candles, tf, shorthand):
     return None
 
 # -------------------------
-# ARROW VISUALIZATION FIX: Enhanced Chart with Directional Arrows
+# Enhanced Chart Generation
 # -------------------------
 def create_adaptive_signal_chart(signal_data):
-    """Create enhanced chart with directional arrows instead of triangles"""
+    """Create enhanced chart for adaptive signal visualization"""
     candles = signal_data["candles"]
     ma1, ma2, ma3 = signal_data["ma1_array"], signal_data["ma2_array"], signal_data["ma3_array"]
     signal_idx = signal_data["idx"]
@@ -641,7 +634,6 @@ def create_adaptive_signal_chart(signal_data):
     fig.patch.set_facecolor('#0a0a0a')
     ax.set_facecolor('#0a0a0a')
     
-    # Enhanced candlestick plotting
     for i, candle in enumerate(chart_candles):
         o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
         
@@ -664,7 +656,6 @@ def create_adaptive_signal_chart(signal_data):
         
         ax.plot([i, i], [l, h], color=wick_color, linewidth=1.5, alpha=0.8)
     
-    # Enhanced moving averages
     def plot_enhanced_ma(ma_values, label, color, linewidth=2.5):
         chart_ma = []
         for i in range(chart_start, n):
@@ -681,61 +672,30 @@ def create_adaptive_signal_chart(signal_data):
     plot_enhanced_ma(ma2, "MA2 (SMMA Close-19) - Backup S/R", "#00bfff")
     plot_enhanced_ma(ma3, "MA3 (SMA MA2-25) - Trend Filter", "#ff6347")
     
-    # ENHANCED ARROW VISUALIZATION
     signal_chart_idx = signal_idx - chart_start
     if 0 <= signal_chart_idx < len(chart_candles):
         signal_candle = chart_candles[signal_chart_idx]
-        
-        # Get price range for arrow positioning
-        price_range = max([c["high"] for c in chart_candles]) - min([c["low"] for c in chart_candles])
-        arrow_offset = price_range * 0.05  # 5% of price range
+        signal_price = signal_candle["close"]
         
         if signal_data["side"] == "BUY":
-            # GREEN UPWARD ARROW
-            arrow_color = "#00ff88"
-            arrow_start_y = signal_candle["low"] - arrow_offset
-            arrow_end_y = signal_candle["low"] + arrow_offset * 2
-            
-            # Draw arrow shaft
-            ax.plot([signal_chart_idx, signal_chart_idx], 
-                   [arrow_start_y, arrow_end_y], 
-                   color=arrow_color, linewidth=4, alpha=0.9, zorder=20)
-            
-            # Draw arrow head (upward pointing)
-            ax.annotate('', xy=(signal_chart_idx, arrow_end_y), 
-                       xytext=(signal_chart_idx, arrow_end_y - arrow_offset * 0.3),
-                       arrowprops=dict(arrowstyle='->', lw=3, color=arrow_color),
-                       zorder=21)
-            
+            marker_color = "#00ff88"
+            marker_symbol = "^"
         else:
-            # RED DOWNWARD ARROW  
-            arrow_color = "#ff4444"
-            arrow_start_y = signal_candle["high"] + arrow_offset
-            arrow_end_y = signal_candle["high"] - arrow_offset * 2
-            
-            # Draw arrow shaft
-            ax.plot([signal_chart_idx, signal_chart_idx], 
-                   [arrow_start_y, arrow_end_y], 
-                   color=arrow_color, linewidth=4, alpha=0.9, zorder=20)
-            
-            # Draw arrow head (downward pointing)
-            ax.annotate('', xy=(signal_chart_idx, arrow_end_y), 
-                       xytext=(signal_chart_idx, arrow_end_y + arrow_offset * 0.3),
-                       arrowprops=dict(arrowstyle='->', lw=3, color=arrow_color),
-                       zorder=21)
+            marker_color = "#ff4444"
+            marker_symbol = "v"
         
-        # Add confidence indicator as text box
+        ax.scatter([signal_chart_idx], [signal_price], 
+                  color=marker_color, marker=marker_symbol, 
+                  s=400, edgecolor="#ffffff", linewidth=3, zorder=15,
+                  label=f'{signal_data["side"]} Signal')
+        
         confidence_text = f"{signal_data['confidence']:.0%}"
-        text_y = arrow_start_y if signal_data["side"] == "BUY" else arrow_start_y
-        
         ax.annotate(confidence_text, 
-                   xy=(signal_chart_idx, text_y),
-                   xytext=(15, 0), textcoords='offset points',
+                   xy=(signal_chart_idx, signal_price),
+                   xytext=(10, 20), textcoords='offset points',
                    fontsize=12, fontweight='bold', color='white',
-                   bbox=dict(boxstyle='round,pad=0.3', facecolor=arrow_color, alpha=0.8),
-                   zorder=22)
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor=marker_color, alpha=0.7))
     
-    # Enhanced title with trend and pattern information
     trend_emoji = "📈" if signal_data["trend"] == "UPTREND" else "📉"
     confidence_stars = "★" * min(5, int(signal_data["confidence"] * 5))
     
@@ -745,22 +705,18 @@ def create_adaptive_signal_chart(signal_data):
     
     ax.set_title(title, fontsize=16, color='white', fontweight='bold', pad=25)
     
-    # Enhanced legend
     legend = ax.legend(loc="upper left", frameon=True, facecolor='#1a1a1a', 
                       edgecolor='white', fontsize=11, framealpha=0.9)
     for text in legend.get_texts():
         text.set_color('white')
     
-    # Enhanced grid and styling
     ax.grid(True, alpha=0.2, color='gray', linestyle='--', linewidth=0.5)
     ax.tick_params(colors='white', labelsize=10)
     
-    # Style spines
     for spine in ax.spines.values():
         spine.set_color('white')
         spine.set_linewidth(1.2)
     
-    # Add trend direction indicator
     trend_text = f"Trend: {signal_data['trend']}"
     ax.text(0.02, 0.98, trend_text, transform=ax.transAxes,
             fontsize=12, fontweight='bold', color='white',
@@ -782,10 +738,13 @@ def create_adaptive_signal_chart(signal_data):
     return chart_file.name
 
 # -------------------------
-# ADDITIONAL TIMING SAFEGUARD
+# Main Execution Functions
 # -------------------------
+def get_timeframe_for_symbol(shorthand):
+    return SYMBOL_TF_MAP.get(shorthand, TIMEFRAMES[0] if TIMEFRAMES else 300)
+
 def run_adaptive_analysis():
-    """Enhanced DSR analysis with PROPER TIMING CONTROL"""
+    """Enhanced DSR analysis with adaptive intelligence"""
     signals_found = 0
     
     for shorthand, deriv_symbol in SYMBOL_MAP.items():
@@ -797,7 +756,7 @@ def run_adaptive_analysis():
                 print(f"Analyzing {shorthand} ({deriv_symbol}) on {tf_display}...")
             
             candles = fetch_candles(deriv_symbol, tf)
-            if len(candles) < MIN_CANDLES + 1:  # Need extra candle for confirmation
+            if len(candles) < MIN_CANDLES:
                 if DEBUG:
                     print(f"Insufficient candles for {shorthand}: {len(candles)}")
                 continue
@@ -806,25 +765,12 @@ def run_adaptive_analysis():
             if not signal:
                 continue
             
-            # Use the CONFIRMATION CANDLE epoch (last completed candle)
-            confirmation_epoch = signal["candles"][signal["idx"]]["epoch"]
-            
-            # Additional timing check: ensure candle is truly closed
-            import time
-            current_time = int(time.time())
-            candle_close_time = confirmation_epoch + tf  # When candle should close
-            
-            if current_time < candle_close_time:
-                if DEBUG:
-                    print(f"{shorthand}: Confirmation candle not yet closed, skipping signal")
-                continue
-            
-            if already_sent(shorthand, tf, confirmation_epoch, signal["side"]):
+            current_epoch = signal["candles"][signal["idx"]]["epoch"]
+            if already_sent(shorthand, tf, current_epoch, signal["side"]):
                 if DEBUG:
                     print(f"Signal already sent for {shorthand}")
                 continue
             
-            # Rest of the function remains the same...
             tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
             
             confidence_level = signal["confidence"]
@@ -853,8 +799,7 @@ def run_adaptive_analysis():
                 f"🔺 MA3: {signal['ma3']:.5f}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 Adaptive Algorithm\n"
-                f"⚙️ Market-Responsive Thresholds\n"
-                f"⏰ Signal: AFTER Confirmation Close"
+                f"⚙️ Market-Responsive Thresholds"
             )
             
             chart_path = create_adaptive_signal_chart(signal)
@@ -862,10 +807,10 @@ def run_adaptive_analysis():
             success, msg_id = send_telegram_photo(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, caption, chart_path)
             
             if success:
-                mark_sent(shorthand, tf, confirmation_epoch, signal["side"])
+                mark_sent(shorthand, tf, current_epoch, signal["side"])
                 signals_found += 1
                 if DEBUG:
-                    print(f"PROPERLY TIMED Adaptive DSR signal sent for {shorthand}: {signal['side']} (Confidence: {confidence_level:.0%})")
+                    print(f"Adaptive DSR signal sent for {shorthand}: {signal['side']} (Confidence: {confidence_level:.0%})")
             
             try:
                 os.unlink(chart_path)
@@ -878,7 +823,7 @@ def run_adaptive_analysis():
                 traceback.print_exc()
     
     if DEBUG:
-        print(f"Analysis complete. {signals_found} properly-timed adaptive DSR signals found.")
+        print(f"Analysis complete. {signals_found} adaptive DSR signals found.")
     
     return signals_found
 
