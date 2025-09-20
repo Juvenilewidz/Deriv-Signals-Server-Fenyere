@@ -881,3 +881,116 @@ def run_adaptive_analysis():
         print(f"Analysis complete. {signals_found} properly-timed adaptive DSR signals found.")
     
     return signals_found
+
+def run_analysis():
+    """Wrapper function to maintain compatibility"""
+    return run_adaptive_analysis()
+
+# -------------------------
+# Testing and Validation
+# -------------------------
+def validate_strategy_components():
+    """Validate that all strategy components are working correctly"""
+    print("Validating Adaptive DSR Strategy Components...")
+    print("=" * 50)
+    
+    sample_candles = []
+    base_price = 1000.0
+    
+    for i in range(100):
+        price_change = 0.1 if i < 50 else -0.1
+        base_price += price_change
+        
+        candle = {
+            "epoch": 1640995200 + i * 300,
+            "open": base_price - 0.05,
+            "high": base_price + 0.1,
+            "low": base_price - 0.1,
+            "close": base_price
+        }
+        sample_candles.append(candle)
+    
+    ma1, ma2, ma3 = compute_mas(sample_candles)
+    mas_objects = create_ma_objects(ma1, ma2, ma3)
+    
+    print(f"✓ MA calculations: {len([ma for ma in mas_objects if ma is not None])} valid periods")
+    
+    if mas_objects and mas_objects[-1]:
+        trend = detect_adaptive_trend(mas_objects, sample_candles[-1]["close"])
+        print(f"✓ Trend detection: {trend.value}")
+    
+    ranging = is_adaptive_ranging_market(mas_objects, sample_candles)
+    spike = detect_adaptive_price_spike(sample_candles)
+    separation = assess_ma_separation_quality(mas_objects)
+    
+    print(f"✓ Market filters - Ranging: {ranging}, Spike: {spike}, Separation: {separation}")
+    print("Strategy validation complete.")
+
+def create_sample_data():
+    """Create sample candle data for testing"""
+    import random
+    
+    candles = []
+    base_price = 100.0
+    timestamp = 1640995200
+    
+    for i in range(100):
+        if i < 30:
+            price_change = random.uniform(-0.1, 0.3)
+        elif i < 60:
+            price_change = random.uniform(-0.3, 0.1)
+        else:
+            price_change = random.uniform(-0.1, 0.2)
+        
+        base_price += price_change
+        
+        open_price = base_price + random.uniform(-0.05, 0.05)
+        close_price = base_price + random.uniform(-0.05, 0.05)
+        high_price = max(open_price, close_price) + random.uniform(0, 0.1)
+        low_price = min(open_price, close_price) - random.uniform(0, 0.1)
+        
+        candle = {
+            "epoch": timestamp + i * 300,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price
+        }
+        candles.append(candle)
+    
+    return candles
+
+def run_bot_test():
+    """Test bot with sample data"""
+    print("Testing Adaptive DSR Bot...")
+    print("=" * 40)
+    
+    sample_candles = create_sample_data()
+    
+    for i in range(max(0, len(sample_candles) - 10), len(sample_candles)):
+        candles_subset = sample_candles[:i+1]
+        if len(candles_subset) >= MIN_CANDLES:
+            signal = detect_adaptive_signal(candles_subset, 300, "TEST")
+            
+            if signal:
+                print(f"\nPeriod {i+1}: {signal['side']} Signal")
+                print(f"Pattern: {signal['pattern']} at {signal['ma_level']}")
+                print(f"Confidence: {signal['confidence']:.0%}")
+                print(f"Trend: {signal['trend']}")
+                print("-" * 30)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            validate_strategy_components()
+            print("\n" + "="*60 + "\n")
+            
+            run_bot_test()
+            print("\n" + "="*60 + "\n")
+        
+        run_analysis()
+        
+    except Exception as e:
+        print(f"Critical error: {e}")
+        if DEBUG:
+            traceback.print_exc()
