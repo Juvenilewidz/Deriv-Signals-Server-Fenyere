@@ -1,4 +1,4 @@
-name: Deriv Signal Bot
+name: Executor
 
 on:
   schedule:
